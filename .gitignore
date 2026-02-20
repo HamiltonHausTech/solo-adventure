@@ -1,0 +1,6 @@
+.venv/
+venv/
+.env
+**/__pycache__/
+characters/
+game_state.json
