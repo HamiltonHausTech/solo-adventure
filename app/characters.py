@@ -103,6 +103,14 @@ def load_character(
     for slot in ["head", "arms", "hands", "chest", "legs", "feet"]:
         equipment.setdefault(slot, None)
 
+    # Restock consumables when starting a new campaign
+    potion_count = sum(
+        1 for item in inventory
+        if isinstance(item, dict) and str(item.get("id", "")).lower() == "healing_potion"
+    )
+    for _ in range(max(0, 3 - potion_count)):
+        inventory.append(item_from_name(cid, "healing_potion"))
+
     return character, inventory, equipment
 
 

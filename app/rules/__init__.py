@@ -6,6 +6,7 @@ from .combat import (
     apply_companion_action,
     apply_enemy_action,
     apply_player_action,
+    clear_round_buffs,
     end_combat_if_needed,
 )
 from .companions import create_companion, create_campaign_companions, create_companion_from_profile
@@ -47,6 +48,7 @@ __all__ = [
     "create_campaign_companions",
     "create_companion",
     "create_companion_from_profile",
+    "clear_round_buffs",
     "create_enemies",
     "create_enemy",
     "create_player",

@@ -147,7 +147,25 @@ class Companion(Mob):
 
 @dataclass
 class Enemy(Mob):
-    pass
+    asleep: bool = False
+
+    def to_dict(self) -> Dict:
+        base = super().to_dict()
+        base["asleep"] = self.asleep
+        return base
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "Enemy":
+        mob = super().from_dict(data)
+        return cls(
+            name=mob.name,
+            hp=mob.hp,
+            max_hp=mob.max_hp,
+            ac=mob.ac,
+            attack_bonus=mob.attack_bonus,
+            damage=mob.damage,
+            asleep=bool(data.get("asleep", False)),
+        )
 
 
 @dataclass
@@ -173,8 +191,13 @@ class GameState:
     turn: int = 0
     turn_log: List[str] = field(default_factory=list)
     last_event: str = ""
+    last_player_input: str = ""
+    response_log: List[Dict[str, Any]] = field(default_factory=list)
     player_defending: bool = False
     companion_defending: bool = False
+    player_shield_active: bool = False
+    player_bless_active: bool = False
+    companion_bless_active: bool = False
     game_over: bool = False
     rest_streak: int = 0
     pending_level_choices: List[Dict[str, Any]] = field(default_factory=list)
@@ -202,8 +225,13 @@ class GameState:
             "turn": self.turn,
             "turn_log": list(self.turn_log),
             "last_event": self.last_event,
+            "last_player_input": self.last_player_input,
+            "response_log": list(self.response_log[-50:]),
             "player_defending": self.player_defending,
             "companion_defending": self.companion_defending,
+            "player_shield_active": self.player_shield_active,
+            "player_bless_active": self.player_bless_active,
+            "companion_bless_active": self.companion_bless_active,
             "game_over": self.game_over,
             "rest_streak": self.rest_streak,
             "pending_level_choices": list(self.pending_level_choices),
@@ -249,8 +277,13 @@ class GameState:
             turn=int(data.get("turn", 0)),
             turn_log=list(data.get("turn_log", [])),
             last_event=data.get("last_event", ""),
+            last_player_input=str(data.get("last_player_input", "")),
+            response_log=list(data.get("response_log", [])[-50:]),
             player_defending=bool(data.get("player_defending", False)),
             companion_defending=bool(data.get("companion_defending", False)),
+            player_shield_active=bool(data.get("player_shield_active", False)),
+            player_bless_active=bool(data.get("player_bless_active", False)),
+            companion_bless_active=bool(data.get("companion_bless_active", False)),
             game_over=bool(data.get("game_over", False)),
             rest_streak=int(data.get("rest_streak", 0)),
             pending_level_choices=list(data.get("pending_level_choices", [])),
@@ -285,6 +318,11 @@ def load_state(path: str) -> GameState:
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError(f"Save file has invalid or incompatible format: {e}") from e
     _migrate_legacy_flags(state)
+    # Restock consumables if inventory is empty (safety net for corrupted/cleared state)
+    if not state.inventory:
+        cid = state.campaign_id or "ruined_watchtower"
+        for _ in range(3):
+            state.inventory.append(item_from_name(cid, "healing_potion"))
     return state
 
 

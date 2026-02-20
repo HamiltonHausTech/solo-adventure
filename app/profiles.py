@@ -93,6 +93,17 @@ CLASS_PROFILES: Dict[str, ClassProfile] = {
         spells=["Spark"],
         description="Arcane caster with limited stamina.",
     ),
+    "Cleric": ClassProfile(
+        name="Cleric",
+        role="caster",
+        base_hp=12,
+        base_ac=14,
+        attack_bonus=2,
+        damage="1d6+1",
+        spells=["Cure Wounds"],
+        description="Divine healer and support caster.",
+        hp_per_level=1,
+    ),
 }
 
 RACE_PROFILES: Dict[str, RaceProfile] = {

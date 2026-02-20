@@ -10,6 +10,15 @@ from ..util import pick_target_by_hp
 
 from .dice import roll_die, roll_dice
 from .flags import get_flag_dict, get_flag_list, next_corpse_id
+from .spells import (
+    SPELL_DAMAGE,
+    SPELL_HEAL,
+    get_best_damage_spell,
+    get_spell_mana_cost,
+    is_damage_spell,
+    is_healing_spell,
+    resolve_spell_name,
+)
 
 
 def _attack_roll(attacker_bonus: int, target_ac: int, target_defending: bool) -> tuple[bool, int, int]:
@@ -25,6 +34,27 @@ def _apply_damage(target_hp: int, damage_expr: str, bonus: int = 0) -> tuple[int
         detail = f"{detail}{bonus:+d}"
     damage += bonus
     return max(0, target_hp - damage), f"{damage} ({detail})"
+
+
+def _select_heal_target(state: GameState, query: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Return (target_key, error). target_key is 'player' or 'companion'."""
+    token = (query or "").strip().lower()
+    if token in {"me", "self", "player", "you", "myself"}:
+        return "player", None
+    comp_name = state.companion.name.lower()
+    if token in {"companion", "her", "him"} or token in comp_name:
+        return "companion", None
+    if not token:
+        player_ratio = state.player.hp / max(1, state.player.max_hp)
+        companion_ratio = (
+            state.companion.hp / max(1, state.companion.max_hp)
+            if state.companion.hp > 0
+            else 1.0
+        )
+        return "companion" if companion_ratio < player_ratio else "player", None
+    if token in state.companion.name.lower():
+        return "companion", None
+    return "player", None
 
 
 def _select_enemy(state: GameState, query: Optional[str]) -> tuple[Optional[Enemy], Optional[str]]:
@@ -49,7 +79,9 @@ def _select_enemy(state: GameState, query: Optional[str]) -> tuple[Optional[Enem
     return matches[0], None
 
 
-def apply_player_action(state: GameState, action: str, target: Optional[str] = None) -> str:
+def apply_player_action(
+    state: GameState, action: str, target: Optional[str] = None, spell_name: Optional[str] = None
+) -> str:
     from .player import is_caster
 
     action = action.lower()
@@ -58,6 +90,99 @@ def apply_player_action(state: GameState, action: str, target: Optional[str] = N
         state.player_defending = True
         return f"{state.player.name} takes a defensive stance (+2 AC until next attack)."
 
+    # Spell casting: explicit spell or "special" (auto best damage for casters)
+    if spell_name or (action == "special" and is_caster(state.player.cls)):
+        if spell_name:
+            resolved, err = resolve_spell_name(state.player.learned_spells, spell_name)
+            if err:
+                return err
+            spell_name = resolved
+        else:
+            spell_name = get_best_damage_spell(state.player.learned_spells)
+            if not spell_name or not is_damage_spell(spell_name):
+                return "You have no damage spells to cast."
+
+        mana_cost = get_spell_mana_cost(spell_name)
+        if mana_cost <= 0:
+            return f"You don't know how to cast {spell_name}."
+        if state.player.mana < mana_cost:
+            return "You are out of mana."
+
+        # Cure Wounds: healing spell, target player or companion
+        if spell_name == "Cure Wounds":
+            heal_target, err = _select_heal_target(state, target)
+            if err:
+                return err
+            state.player.mana -= mana_cost
+            heal_dice, _ = SPELL_HEAL[spell_name]
+            amount, detail = roll_dice(heal_dice)
+            if heal_target == "player":
+                old_hp = state.player.hp
+                state.player.hp = min(state.player.max_hp, old_hp + amount)
+                healed = state.player.hp - old_hp
+                return f"You cast Cure Wounds on yourself, healing {healed} ({detail})."
+            companion = state.companion
+            if companion.hp <= 0:
+                return "Your companion is down and cannot be healed."
+            old_hp = companion.hp
+            companion.hp = min(companion.max_hp, old_hp + amount)
+            healed = companion.hp - old_hp
+            return f"You cast Cure Wounds on {companion.name}, healing {healed} ({detail})."
+
+        # Bless: +1 AC and +1 attack until next turn for one ally
+        if spell_name == "Bless":
+            bless_target, _ = _select_heal_target(state, target)
+            state.player.mana -= mana_cost
+            if bless_target == "player":
+                state.player_bless_active = True
+                return "You bless yourself. +1 AC and +1 attack until your next turn."
+            state.companion_bless_active = True
+            return f"You bless {state.companion.name}. +1 AC and +1 attack until your next turn."
+
+        # Shield: self-buff, no target
+        if spell_name == "Shield":
+            state.player.mana -= mana_cost
+            state.player_shield_active = True
+            return f"You weave a shimmering barrier. +2 AC until your next turn."
+
+        # Sleep: control spell, needs target
+        if spell_name == "Sleep":
+            target_enemy, error = _select_enemy(state, target)
+            if error:
+                return error
+            if not target_enemy:
+                return "There's nothing to cast Sleep on."
+            state.player.mana -= mana_cost  # Pay before save
+            dc = 12 + state.player.stats.get("INT", 0)
+            save_roll = roll_die(20)
+            if save_roll >= dc:
+                return f"You cast Sleep at {target_enemy.name}. They resist (roll {save_roll} vs DC {dc})."
+            target_enemy.asleep = True
+            return f"You cast Sleep. {target_enemy.name} slumps, unconscious (roll {save_roll} vs DC {dc})."
+
+        # Damage spell
+        if is_damage_spell(spell_name) and spell_name in SPELL_DAMAGE:
+            target_enemy, error = _select_enemy(state, target)
+            if error:
+                return error
+            if not target_enemy:
+                return "There's nothing to attack."
+            damage_expr, _ = SPELL_DAMAGE[spell_name]
+            state.player.mana -= mana_cost
+            spell_mod = state.player.stats.get("WIS", 0) if state.player.cls == "Cleric" else state.player.stats.get("INT", 0)
+            attack_bonus = state.player.attack_bonus + spell_mod + (1 if state.player_bless_active else 0)
+            hit, roll, total = _attack_roll(
+                attacker_bonus=attack_bonus,
+                target_ac=target_enemy.ac,
+                target_defending=False,
+            )
+            if hit:
+                new_hp, detail = _apply_damage(target_enemy.hp, damage_expr)
+                target_enemy.hp = new_hp
+                return f"You channel {spell_name}. Hit {target_enemy.name} (roll {roll} -> {total}) for {detail} damage."
+            return f"You channel {spell_name}. Miss {target_enemy.name} (roll {roll} -> {total})."
+
+    # Melee: attack, Fighter/Rogue special
     target_enemy, error = _select_enemy(state, target)
     if error:
         return error
@@ -65,24 +190,12 @@ def apply_player_action(state: GameState, action: str, target: Optional[str] = N
         return "There's nothing to attack."
 
     special_bonus = 0
-    attack_bonus = state.player.attack_bonus
+    attack_bonus = state.player.attack_bonus + (1 if state.player_bless_active else 0)
     damage_expr = state.player.damage
     flavor = ""
 
     if action == "special":
-        if state.player.cls == "Wizard":
-            from .spells import SPELL_DAMAGE, get_best_damage_spell
-
-            spell_name = get_best_damage_spell(state.player.learned_spells)
-            if not spell_name or spell_name not in SPELL_DAMAGE:
-                return "You have no damage spells to cast."
-            damage_expr, mana_cost = SPELL_DAMAGE[spell_name]
-            if state.player.mana < mana_cost:
-                return "You are out of mana."
-            state.player.mana -= mana_cost
-            attack_bonus += state.player.stats.get("INT", 0)
-            flavor = f"You channel {spell_name}. "
-        elif state.player.cls == "Fighter":
+        if state.player.cls == "Fighter":
             special_bonus = 2
             flavor = "You drive a heavy power strike. "
         elif state.player.cls == "Rogue":
@@ -99,6 +212,13 @@ def apply_player_action(state: GameState, action: str, target: Optional[str] = N
         target_enemy.hp = new_hp
         return f"{flavor}Hit {target_enemy.name} (roll {roll} -> {total}) for {detail} damage."
     return f"{flavor}Miss {target_enemy.name} (roll {roll} -> {total})."
+
+
+def clear_round_buffs(state: GameState) -> None:
+    """Clear temporary buffs at end of combat round."""
+    state.player_shield_active = False
+    state.player_bless_active = False
+    state.companion_bless_active = False
 
 
 def apply_companion_action(state: GameState) -> str:
@@ -118,12 +238,13 @@ def apply_companion_action(state: GameState) -> str:
 
     # Caster companion: cast damage spell if mana >= cost and has spell
     spell_name = get_best_damage_spell(companion.learned_spells) if companion.learned_spells else None
+    comp_attack_bonus = companion.attack_bonus + (1 if state.companion_bless_active else 0)
     if spell_name and spell_name in SPELL_DAMAGE:
         damage_expr, mana_cost = SPELL_DAMAGE[spell_name]
         if companion.mana >= mana_cost and companion.max_mana > 0:
             companion.mana -= mana_cost
             hit, roll, total = _attack_roll(
-                attacker_bonus=companion.attack_bonus,
+                attacker_bonus=comp_attack_bonus,
                 target_ac=target_enemy.ac,
                 target_defending=False,
             )
@@ -135,7 +256,7 @@ def apply_companion_action(state: GameState) -> str:
 
     # Melee attack
     hit, roll, total = _attack_roll(
-        attacker_bonus=companion.attack_bonus,
+        attacker_bonus=comp_attack_bonus,
         target_ac=target_enemy.ac,
         target_defending=False,
     )
@@ -154,6 +275,10 @@ def apply_enemy_action(state: GameState) -> List[str]:
     results: List[str] = []
     companion = state.companion
     for enemy in alive:
+        if getattr(enemy, "asleep", False):
+            enemy.asleep = False
+            results.append(f"{enemy.name} stirs and wakes.")
+            continue
         profile = get_mob_profile(state.campaign_id, enemy.name)
         ai = getattr(profile, "ai", "focus_weakest")
         if ai == "focus_player":
@@ -167,9 +292,10 @@ def apply_enemy_action(state: GameState) -> List[str]:
             target = pick_target_by_hp(targets)
 
         if target == "player":
+            ac = state.player.ac + (2 if state.player_shield_active else 0) + (1 if state.player_bless_active else 0)
             hit, roll, total = _attack_roll(
                 attacker_bonus=enemy.attack_bonus,
-                target_ac=state.player.ac,
+                target_ac=ac,
                 target_defending=state.player_defending,
             )
             if hit:
@@ -184,9 +310,10 @@ def apply_enemy_action(state: GameState) -> List[str]:
                 )
             continue
 
+        comp_ac = companion.ac + (1 if state.companion_bless_active else 0)
         hit, roll, total = _attack_roll(
             attacker_bonus=enemy.attack_bonus,
-            target_ac=companion.ac,
+            target_ac=comp_ac,
             target_defending=state.companion_defending,
         )
         if hit:

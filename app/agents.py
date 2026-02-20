@@ -11,18 +11,27 @@ from .state import GameState
 
 
 def gm_narrate(state: GameState, llm: LLMClient, player_input: str, rules_result: str) -> str:
+    text, _ = gm_narrate_with_source(state, llm, player_input, rules_result)
+    return text
+
+
+def gm_narrate_with_source(
+    state: GameState, llm: LLMClient, player_input: str, rules_result: str
+) -> tuple[str, str]:
+    """Return (narrative_text, source) where source is 'stub', 'ai', or 'fallback'."""
     user_prompt = (
         f"STATE\n{format_state_for_gm(state)}\n\n"
         f"PLAYER INPUT\n{player_input}\n\n"
         f"RULES RESULT\n{rules_result}\n\n"
-        "Narrate the rules result and ask the player what they do next."
+        "Add brief atmospheric flavor (do not repeat RULES RESULT verbatim) and end with a short question "
+        "prompting the player's next action."
     )
-    return llm.gm_reply(GM_SYSTEM_PROMPT, user_prompt)
+    return llm.gm_reply_with_source(GM_SYSTEM_PROMPT, user_prompt)
 
 
 def companion_suggest(state: GameState, llm: LLMClient) -> str:
     if state.in_combat:
-        actions = "attack, defend, special, use, inventory"
+        actions = "attack, defend, special, cast <spell> [target], use, inventory"
     else:
         actions = "talk, search, loot, move, rest, use, inventory"
     player_full = state.player.hp >= state.player.max_hp

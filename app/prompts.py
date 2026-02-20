@@ -8,9 +8,11 @@ from .util import inventory_names
 
 
 GM_SYSTEM_PROMPT = (
-    "You are the GM for a tiny solo fantasy adventure. Narrate outcomes that the rules engine "
-    "already resolved. Do NOT invent new outcomes, rolls, damage, or state changes. Ask the player "
-    "what they do next with a short question. Keep responses under 120 words."
+    "You are the GM for a tiny solo fantasy adventure. The rules engine has already resolved the outcome. "
+    "Do NOT repeat the RULES RESULT verbatim—add brief atmospheric flavor and end with a short question "
+    "prompting the player's next action. When RULES RESULT contains quoted dialogue, that is displayed "
+    "separately—do not repeat it; add atmosphere and prompt. Do NOT invent new outcomes, rolls, damage, "
+    "or state changes. Keep responses under 120 words."
 )
 
 COMPANION_SYSTEM_PROMPT = (

@@ -102,6 +102,23 @@ class RulesTests(unittest.TestCase):
         result = apply_exploration_action(state, "search")
         self.assertIn("search the crumbling barracks", result.lower())
 
+    def test_passage_room_loot_adds_gold(self) -> None:
+        from app.content import Room, get_campaign, register_campaign
+        from app.rules.exploration import apply_exploration_action
+
+        # Use lost_crypt hallway which has room_loot_config
+        state = self.make_state()
+        state.campaign_id = "lost_crypt"
+        state.room_id = "hallway"
+        state.player.gold = 5
+        with patch("app.rules.exploration.roll_dice", return_value=(7, "2d6")):
+            result = apply_exploration_action(state, "loot")
+        self.assertIn("7 gold", result)
+        self.assertEqual(state.player.gold, 12)
+        # Second loot returns already searched
+        result2 = apply_exploration_action(state, "loot")
+        self.assertIn("already searched", result2.lower())
+
     def test_loot_without_corpse(self) -> None:
         state = self.make_state()
         state.room_id = "barracks"

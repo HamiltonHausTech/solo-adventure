@@ -10,7 +10,7 @@ from ..state import GameState
 from .enemies import create_enemies
 from .flags import get_flag_dict, get_flag_list, next_corpse_id
 from .inventory import add_item_to_inventory, can_add_item, roll_loot
-from .dice import check
+from .dice import check, roll_dice
 
 
 def start_room(state: GameState, room: Room) -> str:
@@ -178,7 +178,7 @@ def apply_exploration_action(state: GameState, action: str) -> str:
         result = _handle_loot_room(state, room, action)
         if result is not None:
             return result
-        return "Wind whistles through the spire. The chest waits."
+        return f"The {room.name.lower()} is quiet. The prize awaits."
 
     if room.kind == "combat":
         result = _handle_combat_room_post_fight(state, room, action)
@@ -187,6 +187,17 @@ def apply_exploration_action(state: GameState, action: str) -> str:
         return "The enemy blocks your way, ready to strike."
 
     if room.kind == "passage":
+        cfg = getattr(room, "room_loot_config", None) or {}
+        if cfg and action in {"search", "loot", "inspect", "look"}:
+            taken_key = f"room_loot_taken_{room.room_id}"
+            if state.flags.get(taken_key):
+                return "You've already searched this area."
+            gold_expr = cfg.get("gold")
+            if gold_expr:
+                gold_amount, _ = roll_dice(str(gold_expr))
+                state.player.gold += gold_amount
+                state.flags[taken_key] = True
+                return f"You find a discarded pouch with {gold_amount} gold."
         if action in {"search", "inspect", "look"}:
             return room.description
         return "You press onward."

@@ -2,5 +2,5 @@
 venv/
 .env
 **/__pycache__/
-characters/
+characters/*.json
 game_state.json

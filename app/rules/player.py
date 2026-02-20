@@ -10,8 +10,12 @@ from ..state import Character, GameState
 from .dice import roll_dice
 
 
-def _caster_mana(stats: Dict[str, int]) -> int:
-    return 2 + max(0, int(stats.get("INT", 0))) * 2
+def _caster_mana(stats: Dict[str, int], cls: str = "Wizard") -> int:
+    if cls == "Cleric":
+        mod = max(0, int(stats.get("WIS", 0)))
+    else:
+        mod = max(0, int(stats.get("INT", 0)))
+    return 2 + mod * 2
 
 
 def is_caster(cls: str) -> bool:
@@ -28,7 +32,7 @@ def create_player(name: str, cls: str, stats: Dict[str, int], race: str = "Human
     con_bonus = max(0, final_stats.get("CON", 0))
     base_hp = profile.base_hp + con_bonus
     spark_uses = 2 if is_caster(cls) else 0
-    mana = _caster_mana(final_stats) if is_caster(cls) else 0
+    mana = _caster_mana(final_stats, cls) if is_caster(cls) else 0
     learned_spells = list(profile.spells) if profile.spells else []
     return Character(
         name=name,
@@ -53,7 +57,7 @@ def ensure_wizard_mana(state: GameState) -> None:
     if not is_caster(state.player.cls):
         return
     if state.player.max_mana <= 0:
-        max_mana = _caster_mana(state.player.stats)
+        max_mana = _caster_mana(state.player.stats, state.player.cls)
         state.player.max_mana = max_mana
         state.player.mana = max_mana
     else:

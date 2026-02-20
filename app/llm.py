@@ -42,10 +42,18 @@ class LLMClient:
         self.max_retries = max_retries
 
     def gm_reply(self, system_prompt: str, user_prompt: str) -> str:
+        text, _ = self.gm_reply_with_source(system_prompt, user_prompt)
+        return text
+
+    def gm_reply_with_source(self, system_prompt: str, user_prompt: str) -> tuple[str, str]:
+        """Return (response_text, source) where source is 'stub' or 'ai' or 'fallback'."""
         if self.stub:
-            return self._stub_gm()
+            return self._stub_gm(), "stub"
         _debug("GM narration request")
-        return self._chat_with_fallback(system_prompt, user_prompt, self._stub_gm)
+        result, source = self._chat_with_fallback_typed(
+            system_prompt, user_prompt, self._stub_gm
+        )
+        return result, source
 
     def companion_reply(self, system_prompt: str, user_prompt: str) -> str:
         if self.stub or os.getenv("OPENAI_SKIP_COMPANION", "").lower() in ("1", "true", "yes"):
@@ -53,15 +61,16 @@ class LLMClient:
         _debug("Companion suggestion request")
         return self._chat_with_fallback(system_prompt, user_prompt, self._stub_companion)
 
-    def _chat_with_fallback(
-        self, system_prompt: str, user_prompt: str, fallback: object
-    ) -> str:
+    def _chat_with_fallback_typed(
+        self, system_prompt: str, user_prompt: str, fallback
+    ) -> tuple[str, str]:
+        """Like _chat_with_fallback but returns (result, 'ai'|'fallback')."""
         for attempt in range(self.max_retries):
             try:
                 _debug("API call starting...")
                 result = self._chat(system_prompt, user_prompt)
                 _debug("API call succeeded")
-                return result
+                return result, "ai"
             except OpenAIRateLimitError as e:
                 _debug(f"429 error: {e}")
                 err_body = getattr(e, "body", None) or {}
@@ -72,7 +81,8 @@ class LLMClient:
                         "https://platform.openai.com/account/billing — using fallback.",
                         file=sys.stderr,
                     )
-                    return fallback() if callable(fallback) else str(fallback)
+                    res = fallback() if callable(fallback) else str(fallback)
+                    return res, "fallback"
                 print(
                     "\n[Rate limit] OpenAI API rate limit hit. "
                     "Using fallback. Set OPENAI_DEBUG=1 for details.",
@@ -86,7 +96,8 @@ class LLMClient:
                     print(f"[Rate limit] Waiting {delay:.0f}s before retry...", file=sys.stderr)
                     time.sleep(delay)
                 else:
-                    return fallback() if callable(fallback) else str(fallback)
+                    res = fallback() if callable(fallback) else str(fallback)
+                    return res, "fallback"
             except Exception as e:
                 _debug(f"API error: {type(e).__name__}: {e}")
                 if attempt < self.max_retries - 1:
@@ -97,7 +108,14 @@ class LLMClient:
                         f"\n[OpenAI] Request failed after {self.max_retries} retries: {e}",
                         file=sys.stderr,
                     )
-                    return fallback() if callable(fallback) else str(fallback)
+                    res = fallback() if callable(fallback) else str(fallback)
+                    return res, "fallback"
+
+    def _chat_with_fallback(
+        self, system_prompt: str, user_prompt: str, fallback: object
+    ) -> str:
+        result, _ = self._chat_with_fallback_typed(system_prompt, user_prompt, fallback)
+        return result
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
         response = self._client.chat.completions.create(

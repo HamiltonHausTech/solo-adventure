@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 
-from .agents import companion_suggest, gm_narrate
+from .agents import companion_suggest, gm_narrate, gm_narrate_with_source
 from .content import get_campaign, get_exits, get_room, item_from_id, list_campaigns
 from .profiles import (
     get_class_profile,
@@ -18,6 +19,7 @@ from .rules import (
     apply_exploration_action,
     apply_player_action,
     apply_rest,
+    clear_round_buffs,
     create_companion,
     create_player,
     ensure_caster_mana,
@@ -54,6 +56,20 @@ from .util import (
 SAVE_PATH = os.path.join(os.getcwd(), "game_state.json")
 
 
+def _extract_campaign_content(rules_result: str, state: GameState) -> str | None:
+    """Extract quoted dialogue/campaign content from rules result for display."""
+    quoted = re.findall(r"'([^']+)'", rules_result)
+    if not quoted:
+        return None
+    # Use the longest quote (usually the main dialogue)
+    quote = max(quoted, key=len)
+    room = get_room(state.campaign_id, state.room_id)
+    npc = getattr(room, "npc", None)
+    if npc:
+        return f'{npc}: "{quote}"'
+    return f'"{quote}"'
+
+
 def _sync_character(state: GameState) -> None:
     """Persist character to roster so they can be reused across campaigns."""
     try:
@@ -85,6 +101,8 @@ def _choose_or_create_character(campaign_id: str):
     stats = prompt_stat_allocation(total_points=12)
     player = create_player(name=name, cls=cls, stats=stats, race=race)
     inventory = [
+        item_from_id(campaign_id, "healing_potion"),
+        item_from_id(campaign_id, "healing_potion"),
         item_from_id(campaign_id, "healing_potion"),
         item_from_id(campaign_id, "leather_cap"),
         item_from_id(campaign_id, "worn_boots"),
@@ -213,9 +231,14 @@ def print_combat_status(state: GameState) -> None:
             print("Targets: " + ", ".join(str(idx) for idx in range(1, len(enemy_lines) + 1)))
 
 
-def log_turn(state: GameState) -> None:
+def log_turn(state: GameState, player_input: str = "") -> None:
+    """Log turn with player input and rules result."""
+    if player_input:
+        state.last_player_input = player_input
     if state.last_event:
-        state.turn_log.append(f"Turn {state.turn}: {state.last_event}")
+        state.turn_log.append(
+            f"Turn {state.turn}: input={player_input!r} | {state.last_event}"
+        )
 
 
 def gear_menu(state: GameState) -> None:
@@ -289,7 +312,7 @@ def handle_exploration(state: GameState, llm: LLMClient, last_input: str) -> str
     print_status(state)
     print_exits(state)
     print(color_text(f"{state.companion.name} suggests: {companion_suggest(state, llm)}", "cyan"))
-    raw = input("Action (talk/search/loot/move/rest/use/gear/inventory/help/quit): ")
+    raw = input("Action (talk/search/loot/move/rest [N]/use/gear/inventory/help/quit): ")
     action = normalize_action(raw)
     move_target = None
     if action in {"up", "down", "north", "south", "east", "west", "back"}:
@@ -316,7 +339,7 @@ def handle_exploration(state: GameState, llm: LLMClient, last_input: str) -> str
         exits = get_exits(state.campaign_id, state.room_id)
         exit_list = ", ".join(sorted(set(exits.values()))) if exits else "none"
         print(
-            "Try: talk, search, loot [number|all], move <destination>, rest, "
+            "Try: talk, search, loot [number|all], move <destination>, rest [N], "
             "use potion [on mara], gear, inventory, stats, quit"
         )
         print(f"Exits: {exit_list}")
@@ -349,18 +372,26 @@ def handle_exploration(state: GameState, llm: LLMClient, last_input: str) -> str
             state.turn += 1
             state.last_event = result
             reset_rest_streak(state)
-            print_outcomes(state, [result])
             save_game(state)
         else:
             print(color_text(result, "yellow"))
         return action
 
-    if action == "rest":
-        result = apply_rest(state)
-        state.turn += 1
-        state.last_event = result
-        print_outcomes(state, [result])
-        log_turn(state)
+    if action == "rest" or action.startswith("rest "):
+        rest_count = 1
+        if action.startswith("rest "):
+            try:
+                rest_count = max(1, min(int(action.split()[1]), 20))
+            except (ValueError, IndexError):
+                rest_count = 1
+        results: list[str] = []
+        for _ in range(rest_count):
+            result = apply_rest(state)
+            state.turn += 1
+            state.last_event = result
+            results.append(result)
+            log_turn(state, raw)
+        state.last_event = " | ".join(results)
         save_game(state)
         return action
 
@@ -380,8 +411,7 @@ def handle_exploration(state: GameState, llm: LLMClient, last_input: str) -> str
     state.turn += 1
     state.last_event = result
     reset_rest_streak(state)
-    print_outcomes(state, [result])
-    log_turn(state)
+    log_turn(state, raw)
     save_game(state)
     return action
 
@@ -390,17 +420,46 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
     print()
     print_combat_status(state)
     print(color_text(f"{state.companion.name} suggests: {companion_suggest(state, llm)}", "cyan"))
-    raw = input("Combat action (attack/defend/special/use/gear/inventory/help/quit): ")
+    raw = input("Combat action (attack/defend/special/cast/use/gear/inventory/help/quit): ")
     action = normalize_action(raw)
     target = None
+    spell_name = None
     if action.startswith("attack "):
         target = action[len("attack ") :].strip()
         action = "attack"
+    elif action.startswith("cast "):
+        rest = action[len("cast ") :].strip()
+        action = "special"
+        if " " in rest:
+            spell_name, target = rest.split(" ", 1)
+        else:
+            spell_name = rest
+            target = None
     elif action.startswith("special "):
         target = action[len("special ") :].strip()
         action = "special"
-    elif action.startswith("spark "):
-        target = action[len("spark ") :].strip()
+    elif action == "spark" or action.startswith("spark "):
+        target = action[len("spark ") :].strip() if " " in action else None
+        spell_name = "spark"
+        action = "special"
+    elif action == "magic missile" or action.startswith("magic missile "):
+        target = action[len("magic missile ") :].strip() if " " in action else None
+        spell_name = "magic missile"
+        action = "special"
+    elif action == "sleep" or action.startswith("sleep "):
+        target = action[len("sleep ") :].strip() if " " in action else None
+        spell_name = "sleep"
+        action = "special"
+    elif action == "shield":
+        spell_name = "shield"
+        action = "special"
+    elif action == "cure wounds" or action.startswith("cure wounds "):
+        target = action[len("cure wounds ") :].strip() if " " in action else None
+        spell_name = "cure wounds"
+        action = "special"
+    elif action == "bless" or action.startswith("bless "):
+        target = action[len("bless ") :].strip() if " " in action else None
+        spell_name = "bless"
         action = "special"
 
     if action in {"quit", "exit"}:
@@ -408,9 +467,11 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
         raise SystemExit
     if action in {"help", "?"}:
         print(
-            "Try: attack [target], defend, special [target] (Spark for wizard), "
+            "Try: attack [target], defend, special, cast <spell> [target], "
             "use potion [on mara], gear, inventory, quit"
         )
+        if state.player.learned_spells:
+            print(f"Spells: {', '.join(state.player.learned_spells)}")
         if state.enemies:
             targets = [
                 f"{idx}:{enemy.name}"
@@ -437,6 +498,7 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
             results = [result]
             results.append(apply_companion_action(state))
             results.extend(apply_enemy_action(state))
+            clear_round_buffs(state)
             end_result = end_combat_if_needed(state)
             if end_result:
                 results.append(end_result)
@@ -445,22 +507,23 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
             state.turn += 1
             state.last_event = " ".join(results)
             reset_rest_streak(state)
-            print_outcomes(state, results)
-            log_turn(state)
+            log_turn(state, raw)
             save_game(state)
         else:
             print(color_text(result, "yellow"))
         return action
 
-    if action in {"spark", "cast"}:
-        action = "special"
+    if action == "cast" and not spell_name:
+        print("Cast which spell? (e.g. cast magic missile, cast sleep 1)")
+        return last_input
     if action not in {"attack", "defend", "special"}:
-        print("Choose attack, defend, or special.")
+        print("Choose attack, defend, special, or cast <spell> [target].")
         return last_input
 
-    results = [apply_player_action(state, action, target)]
+    results = [apply_player_action(state, action, target, spell_name)]
     results.append(apply_companion_action(state))
     results.extend(apply_enemy_action(state))
+    clear_round_buffs(state)
     end_result = end_combat_if_needed(state)
     if end_result:
         results.append(end_result)
@@ -470,8 +533,7 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
     state.turn += 1
     state.last_event = " ".join(results)
     reset_rest_streak(state)
-    print_outcomes(state, results)
-    log_turn(state)
+    log_turn(state, raw)
     save_game(state)
     return action
 
@@ -487,9 +549,25 @@ def main() -> None:
 
     while True:
         if state.game_over:
+            if state.last_event and last_narrated_turn != state.turn:
+                if state.in_combat:
+                    print_outcomes(state, [state.last_event])
+                campaign_content = _extract_campaign_content(state.last_event, state)
+                if campaign_content:
+                    print(color_text(campaign_content, "cyan"))
             print_divider()
             if state.last_event and last_narrated_turn != state.turn:
-                print(gm_narrate(state, llm, last_player_input, state.last_event))
+                gm_text, gm_source = gm_narrate_with_source(
+                    state, llm, state.last_player_input, state.last_event
+                )
+                state.response_log.append({
+                    "turn": state.turn,
+                    "player_input": state.last_player_input,
+                    "rules_result": state.last_event,
+                    "gm_response": gm_text,
+                    "gm_source": gm_source,
+                })
+                print(gm_text)
                 last_narrated_turn = state.turn
             if state.player.hp > 0:
                 campaign = get_campaign(state.campaign_id)
@@ -506,16 +584,33 @@ def main() -> None:
             break
 
         if state.last_event and last_narrated_turn != state.turn:
+            if state.in_combat:
+                print_outcomes(state, [state.last_event])
+            campaign_content = _extract_campaign_content(state.last_event, state)
+            if campaign_content:
+                print(color_text(campaign_content, "cyan"))
             print_divider()
-            print(gm_narrate(state, llm, last_player_input, state.last_event))
+            gm_text, gm_source = gm_narrate_with_source(
+                state, llm, state.last_player_input, state.last_event
+            )
+            state.response_log.append({
+                "turn": state.turn,
+                "player_input": state.last_player_input,
+                "rules_result": state.last_event,
+                "gm_response": gm_text,
+                "gm_source": gm_source,
+            })
+            print(gm_text)
             last_narrated_turn = state.turn
             print()
             if not state.in_combat:
                 corpses = state.flags.get("corpses", {}) if isinstance(state.flags.get("corpses"), dict) else {}
-                looted = state.flags.get("looted_corpses", []) if isinstance(state.flags.get("looted_corpses"), list) else []
-                if state.room_id in corpses and state.room_id not in looted:
-                    print(color_text("Tip: You can 'loot' the corpse.", "gray"))
-                    print()
+                corpse_entries = corpses.get(state.room_id, [])
+                if isinstance(corpse_entries, list):
+                    unlooted = [e for e in corpse_entries if not e.get("looted")]
+                    if unlooted:
+                        print(color_text("Tip: You can 'loot' the corpse.", "gray"))
+                        print()
 
         if state.in_combat:
             last_player_input = handle_combat(state, llm, last_player_input)

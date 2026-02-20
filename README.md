@@ -62,7 +62,7 @@ Characters are saved to the `characters/` directory and can be reused across cam
 - XP and leveling: Earn XP from defeating enemies and completing campaigns. Level up for more HP, attack bonus, and (casters) mana. Spell choices (Wizard at levels 2, 4, 6…) are deferred until your next rest.
  - Combat is lightweight and turn-based; Mara acts after you.
 - Wizards use mana for Spark (cost 2, damage 1d4) and can learn Magic Missile, Shield, Sleep at level-up. Mana scales with INT, regen 1 per round.
-- You start with a Healing Potion (heals 1d6+2 to you or Mara).
+- You start with 3 Healing Potions (each heals 1d6+2 to you or your companion).
 - Each completed turn is appended to a short `turn_log` in the save file for quick replay.
 - Inventory has a slot limit (default 10) and armor slots (head, arms, hands, chest, legs, feet).
 - Looting enemies is manual (`loot` after a fight) and grants gold plus a possible armor piece.

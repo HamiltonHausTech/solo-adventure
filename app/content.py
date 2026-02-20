@@ -18,6 +18,7 @@ class Room:
     # Campaign-driven behavior config (avoids hardcoding in rules)
     social_config: Optional[Dict[str, object]] = None  # stat, dc, success_flag, success_msg, fail_msg
     loot_config: Optional[Dict[str, object]] = None  # stat, dc, success_msg, fail_msg, win_item_id, game_over
+    room_loot_config: Optional[Dict[str, object]] = None  # gold: "2d6" etc., no check, one-time pickup
 
 
 @dataclass(frozen=True)

@@ -64,6 +64,7 @@ ROOMS: Dict[str, Room] = {
         ),
         kind="passage",
         npc=None,
+        room_loot_config={"gold": "2d6"},
     ),
     "guard_room": Room(
         room_id="guard_room",
@@ -190,6 +191,17 @@ COMPANIONS: Dict[str, CompanionProfile] = {
         ai="cautious",
         defend_hp_threshold=3,
     ),
+    "torvald": CompanionProfile(
+        companion_id="torvald",
+        name="Torvald",
+        hp=14,
+        max_hp=14,
+        ac=15,
+        attack_bonus=3,
+        damage="1d8+1",
+        ai="cautious",
+        defend_hp_threshold=4,
+    ),
 }
 
 MOBS: Dict[str, MobProfile] = {
@@ -237,7 +249,7 @@ LOST_CRYPT = Campaign(
     items=ITEM_CATALOG,
     mobs=MOBS,
     companions=COMPANIONS,
-    default_companion_ids=["eldrin", "mara"],
+    default_companion_ids=["eldrin", "mara", "torvald"],
     completion_xp=150,
     exits={
         "approach": {"gate": "gate", "down": "gate"},
