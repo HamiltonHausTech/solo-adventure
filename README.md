@@ -14,7 +14,9 @@ pip install -r requirements.txt
 ```
 
 ## Configure the AI (Optional)
-Option A: set an API key in your shell:
+
+### Option A: OpenAI (hosted)
+Set an API key in your shell:
 ```bash
 export OPENAI_API_KEY=YOUR_KEY_HERE
 # Optional (faster models = quicker responses):
@@ -28,7 +30,32 @@ OPENAI_API_KEY=YOUR_KEY_HERE
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_SKIP_COMPANION=1
 ```
-If no key is set, the game runs with a stub GM and companion.
+If no key is set and no local model is configured, the game runs with a stub GM and companion.
+
+### Option B: Local model via Ollama
+If you run [Ollama](https://ollama.com) locally, you can use a local model instead of OpenAI:
+
+```bash
+# Tell the game to use Ollama instead of OpenAI:
+export LLM_PROVIDER=ollama
+
+# Optional: choose the Ollama model (defaults to "gpt-oss"):
+export OLLAMA_MODEL=gpt-oss
+
+# Optional: change the Ollama host (defaults to http://localhost:11434):
+export OLLAMA_HOST=http://localhost:11434
+
+# You can still skip companion calls as with OpenAI:
+export OPENAI_SKIP_COMPANION=1
+```
+or in `.env`:
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=gpt-oss
+OLLAMA_HOST=http://localhost:11434
+OPENAI_SKIP_COMPANION=1
+```
+With `LLM_PROVIDER=ollama`, no `OPENAI_API_KEY` is required.
 
 ### Rate limits and debugging
 The game makes **2 API calls per turn** (companion suggestion + GM narration). If you hit rate limits:
