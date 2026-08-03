@@ -122,6 +122,7 @@ ITEM_CATALOG: Dict[str, Dict[str, object]] = {
         "name": "Healing Potion",
         "kind": "potion",
         "effect": {"type": "heal", "dice": "1d6+2"},
+        "stackable": True,
         "counts_toward_limit": True,
     },
     "leather_cap": {
@@ -179,6 +180,7 @@ COMPANIONS: Dict[str, CompanionProfile] = {
         mana=6,
         max_mana=6,
         spells=["Spark", "Magic Missile"],
+        personality="curious",
     ),
     "mara": CompanionProfile(
         companion_id="mara",
@@ -190,6 +192,7 @@ COMPANIONS: Dict[str, CompanionProfile] = {
         damage="1d6",
         ai="cautious",
         defend_hp_threshold=3,
+        personality="guarded",
     ),
     "torvald": CompanionProfile(
         companion_id="torvald",
@@ -201,6 +204,7 @@ COMPANIONS: Dict[str, CompanionProfile] = {
         damage="1d8+1",
         ai="cautious",
         defend_hp_threshold=4,
+        personality="steadfast",
     ),
 }
 

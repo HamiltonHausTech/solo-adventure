@@ -10,8 +10,65 @@ from ..state import GameState
 from .dice import roll_die, roll_dice
 
 
+STACK_LIMIT = 10
+
+SHOP_ITEMS: Dict[str, Dict[str, object]] = {
+    "traveler_blade": {
+        "id": "traveler_blade", "name": "Traveler's Blade", "kind": "weapon",
+        "slot": "weapon", "tier": 1, "buy_value": 24, "sell_value": 12,
+        "description": "A reliable balanced blade.",
+        "effect": {"type": "weapon", "damage": "1d8", "attack_bonus": 0},
+    },
+    "duelist_knife": {
+        "id": "duelist_knife", "name": "Duelist's Knife", "kind": "weapon",
+        "slot": "weapon", "tier": 1, "buy_value": 28, "sell_value": 14,
+        "description": "A quick weapon made for precise strikes.",
+        "effect": {"type": "weapon", "damage": "1d6+1", "attack_bonus": 1},
+    },
+    "reinforced_cap": {
+        "id": "reinforced_cap", "name": "Reinforced Cap", "kind": "armor",
+        "slot": "head", "tier": 1, "buy_value": 20, "sell_value": 10,
+        "description": "Layered leather and iron protect the head.",
+        "effect": {"type": "ac", "bonus": 1},
+    },
+    "roadwarden_vest": {
+        "id": "roadwarden_vest", "name": "Roadwarden Vest", "kind": "armor",
+        "slot": "chest", "tier": 1, "buy_value": 36, "sell_value": 18,
+        "description": "A sturdy vest suited to long expeditions.",
+        "effect": {"type": "ac", "bonus": 2},
+    },
+}
+
+
 def item_counts_toward_limit(item: Dict[str, object]) -> bool:
     return bool(item.get("counts_toward_limit", True))
+
+
+def item_quantity(item: Dict[str, object]) -> int:
+    return max(1, int(item.get("quantity", 1)))
+
+
+def normalize_inventory(state: GameState) -> None:
+    """Merge legacy duplicate stackable entries into quantity-based stacks."""
+    normalized: List[Dict[str, object]] = []
+    stack_by_id: Dict[str, Dict[str, object]] = {}
+    for raw in state.inventory:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id", "")).lower()
+        if bool(raw.get("stackable", False)) and item_id:
+            item = dict(raw)
+            quantity = item_quantity(item)
+            item["quantity"] = quantity
+            existing = stack_by_id.get(item_id)
+            if existing is not None:
+                existing["quantity"] = item_quantity(existing) + quantity
+                continue
+            stack_by_id[item_id] = item
+            normalized.append(item)
+        else:
+            normalized.append(raw)
+    state.inventory = normalized
 
 
 def inventory_used(state: GameState) -> int:
@@ -31,9 +88,25 @@ def can_add_item(state: GameState, item: Dict[str, object]) -> bool:
 
 
 def add_item_to_inventory(state: GameState, item: Dict[str, object]) -> Tuple[bool, str]:
+    normalize_inventory(state)
+    if bool(item.get("stackable", False)):
+        item_id = str(item.get("id", "")).lower()
+        existing = next(
+            (entry for entry in state.inventory if str(entry.get("id", "")).lower() == item_id),
+            None,
+        )
+        if existing is not None:
+            combined = item_quantity(existing) + item_quantity(item)
+            stack_limit = max(1, int(item.get("stack_limit", STACK_LIMIT)))
+            if combined > stack_limit:
+                return False, f"That stack can hold at most {stack_limit}."
+            existing["quantity"] = combined
+            return True, f"Added {item.get('name', 'item')} to its stack."
     if not can_add_item(state, item):
         return False, "Inventory is full."
-    state.inventory.append(item)
+    added = dict(item)
+    added["quantity"] = item_quantity(added)
+    state.inventory.append(added)
     return True, f"Added {item.get('name', 'item')} to your pack."
 
 
@@ -47,6 +120,10 @@ def roll_loot(campaign_id: str, enemy_name: str) -> Tuple[int, Optional[str]]:
         gold_amount, _ = roll_dice(str(gold_expr))
     items = list(loot.get("items") or [])
     if not items:
+        return gold_amount, None
+    item_chance = int(loot.get("item_chance", 100))
+    item_chance = max(0, min(100, item_chance))
+    if item_chance < 100 and roll_die(100) > item_chance:
         return gold_amount, None
     idx = roll_die(len(items)) - 1
     return gold_amount, items[idx]
@@ -70,6 +147,7 @@ def sync_player_ac(state: GameState) -> None:
 def find_item(
     state: GameState, query: str, kind_filter: Optional[str] = None
 ) -> Tuple[Optional[dict], Optional[str]]:
+    normalize_inventory(state)
     query = query.strip().lower()
     if not query:
         return None, "Use what?"
@@ -91,6 +169,10 @@ def find_item(
     if not matches:
         return None, "You don't have that."
     if len(matches) > 1:
+        # A stack of identical consumables is one unambiguous choice.
+        match_ids = {str(item.get("id", "")).lower() for item in matches}
+        if len(match_ids) == 1:
+            return matches[0], None
         names = ", ".join(str(item.get("name", "Unknown")) for item in matches)
         return None, f"Be more specific or use an item number: {names}"
     return matches[0], None
@@ -110,7 +192,13 @@ def use_item(state: GameState, query: str, target: Optional[str] = None) -> Tupl
         return False, f"{item.get('name', 'That potion')} has no usable effect yet."
 
     target_key = (target or "").strip().lower()
-    if target_key in {"mara", "companion", "her"}:
+    companion_tokens = {
+        "companion",
+        "her",
+        "him",
+        state.companion.name.lower(),
+    }
+    if target_key in companion_tokens:
         companion = state.companion
         target_label = companion.name
         current_hp = companion.hp
@@ -123,12 +211,8 @@ def use_item(state: GameState, query: str, target: Optional[str] = None) -> Tupl
         heal_target = "player"
     else:
         player_ratio = state.player.hp / max(1, state.player.max_hp)
-        companion_ratio = (
-            state.companion.hp / max(1, state.companion.max_hp)
-            if state.companion.hp > 0
-            else 1.0
-        )
-        if state.companion.hp > 0 and companion_ratio < player_ratio:
+        companion_ratio = state.companion.hp / max(1, state.companion.max_hp)
+        if companion_ratio < player_ratio:
             target_label = state.companion.name
             current_hp = state.companion.hp
             max_hp = state.companion.max_hp
@@ -139,6 +223,9 @@ def use_item(state: GameState, query: str, target: Optional[str] = None) -> Tupl
             max_hp = state.player.max_hp
             heal_target = "player"
 
+    if current_hp >= max_hp:
+        return False, f"{target_label} is already at full health."
+
     amount, detail = roll_dice(str(effect.get("dice", "1d6")))
     new_hp = min(max_hp, current_hp + amount)
     healed = new_hp - current_hp
@@ -147,8 +234,92 @@ def use_item(state: GameState, query: str, target: Optional[str] = None) -> Tupl
     else:
         state.companion.hp = new_hp
 
-    state.inventory.remove(item)
+    quantity = item_quantity(item)
+    if quantity > 1:
+        item["quantity"] = quantity - 1
+    else:
+        state.inventory.remove(item)
     return True, f"You use {item.get('name', 'a potion')} on {target_label}, healing {healed} ({detail})."
+
+
+def drop_item(state: GameState, query: str) -> Tuple[bool, str]:
+    """Discard one carried item. Quest items are protected from accidental loss."""
+    item, error = find_item(state, query)
+    if error:
+        return False, error
+    if not item:
+        return False, "You don't have that."
+    if str(item.get("kind", "")).lower() == "quest":
+        return False, "Quest items cannot be dropped."
+    quantity = item_quantity(item)
+    if quantity > 1:
+        item["quantity"] = quantity - 1
+        return True, f"You drop one {item.get('name', 'item')}. {quantity - 1} remain."
+    state.inventory.remove(item)
+    return True, f"You drop {item.get('name', 'the item')}."
+
+
+def item_sell_value(item: Dict[str, object]) -> int:
+    explicit = int(item.get("sell_value", 0))
+    if explicit > 0:
+        return explicit
+    if str(item.get("kind", "")).lower() not in {"armor", "weapon"}:
+        return 0
+    effect = item.get("effect") if isinstance(item.get("effect"), dict) else {}
+    return 4 + max(0, int(effect.get("bonus", 0))) * 4
+
+
+def buy_healing_potions(state: GameState, quantity: int) -> Tuple[bool, str]:
+    quantity = int(quantity)
+    if quantity not in {1, 3}:
+        return False, "Potions may be purchased one or three at a time."
+    unit_price = 8
+    total = unit_price * quantity
+    if state.player.gold < total:
+        return False, f"You need {total} gold for that purchase."
+    item = item_from_id(state.campaign_id, "healing_potion")
+    item["quantity"] = quantity
+    added, message = add_item_to_inventory(state, item)
+    if not added:
+        return False, message
+    state.player.gold -= total
+    return True, f"You buy {quantity} healing potion{'s' if quantity != 1 else ''} for {total} gold."
+
+
+def shop_catalog() -> List[Dict[str, object]]:
+    return [dict(item) for item in SHOP_ITEMS.values()]
+
+
+def buy_shop_item(state: GameState, item_id: str) -> Tuple[bool, str]:
+    item = SHOP_ITEMS.get(item_id.strip().lower())
+    if not item:
+        return False, "That item is not sold here."
+    price = int(item.get("buy_value", 0))
+    if state.player.gold < price:
+        return False, f"You need {price} gold for that purchase."
+    added, message = add_item_to_inventory(state, dict(item))
+    if not added:
+        return False, message
+    state.player.gold -= price
+    return True, f"You buy {item.get('name', 'the item')} for {price} gold."
+
+
+def sell_item(state: GameState, query: str) -> Tuple[bool, str]:
+    item, error = find_item(state, query)
+    if error:
+        return False, error
+    if not item:
+        return False, "You don't have that."
+    value = item_sell_value(item)
+    if value <= 0:
+        return False, "That item cannot be sold here."
+    quantity = item_quantity(item)
+    if quantity > 1:
+        item["quantity"] = quantity - 1
+    else:
+        state.inventory.remove(item)
+    state.player.gold += value
+    return True, f"You sell {item.get('name', 'the item')} for {value} gold."
 
 
 def equip_item(state: GameState, query: str) -> Tuple[bool, str]:
@@ -158,27 +329,43 @@ def equip_item(state: GameState, query: str) -> Tuple[bool, str]:
         if idx < 0 or idx >= len(state.inventory):
             return False, "That item number does not exist."
         item = state.inventory[idx]
-        if not isinstance(item, dict) or str(item.get("kind", "")).lower() != "armor":
-            return False, "That item is not armor."
+        if not isinstance(item, dict) or str(item.get("kind", "")).lower() not in {"armor", "weapon"}:
+            return False, "That item cannot be equipped."
         error = None
     else:
-        item, error = find_item(state, query, kind_filter="armor")
+        item, error = find_item(state, query)
     if error:
         return False, error
     if not item:
         return False, "You don't have that."
+    if str(item.get("kind", "")).lower() not in {"armor", "weapon"}:
+        return False, "That item cannot be equipped."
     slot = str(item.get("slot", "")).lower()
     if slot not in state.equipment:
-        return False, "That armor can't be equipped."
+        return False, "That item can't be equipped."
     current = state.equipment.get(slot)
+    state.inventory.remove(item)
     if current:
-        if not can_add_item(state, current):
-            return False, "Inventory is full; unequip something first."
         state.inventory.append(current)
     state.equipment[slot] = item
-    state.inventory.remove(item)
     sync_player_ac(state)
-    return True, f"Equipped {item.get('name', 'armor')} to {slot}."
+    return True, f"Equipped {item.get('name', 'item')} to {slot}."
+
+
+def equipment_attack_bonus(state: GameState) -> int:
+    weapon = state.equipment.get("weapon")
+    raw_effect = weapon.get("effect") if isinstance(weapon, dict) else None
+    effect = raw_effect if isinstance(raw_effect, dict) else {}
+    return int(effect.get("attack_bonus", 0)) if effect.get("type") == "weapon" else 0
+
+
+def equipped_damage(state: GameState) -> str:
+    weapon = state.equipment.get("weapon")
+    raw_effect = weapon.get("effect") if isinstance(weapon, dict) else None
+    effect = raw_effect if isinstance(raw_effect, dict) else {}
+    if effect.get("type") == "weapon" and effect.get("damage"):
+        return str(effect["damage"])
+    return state.player.damage
 
 
 def unequip_item(state: GameState, slot: str) -> Tuple[bool, str]:

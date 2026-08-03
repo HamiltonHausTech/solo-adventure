@@ -26,7 +26,13 @@ def is_melee(cls: str) -> bool:
     return is_melee_class(cls)
 
 
-def create_player(name: str, cls: str, stats: Dict[str, int], race: str = "Human") -> Character:
+def create_player(
+    name: str,
+    cls: str,
+    stats: Dict[str, int],
+    race: str = "Human",
+    sex: str = "Unspecified",
+) -> Character:
     profile = get_class_profile(cls)
     final_stats = apply_race_mods(stats, race)
     con_bonus = max(0, final_stats.get("CON", 0))
@@ -47,6 +53,7 @@ def create_player(name: str, cls: str, stats: Dict[str, int], race: str = "Human
         max_mana=mana,
         attack_bonus=profile.attack_bonus,
         damage=profile.damage,
+        sex=sex,
         spark_uses=spark_uses,
         gold=0,
         learned_spells=learned_spells,

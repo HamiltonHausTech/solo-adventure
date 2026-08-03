@@ -25,6 +25,9 @@ def create_companion_from_profile(profile: CompanionProfile) -> Companion:
         max_mana=max_mana,
         learned_spells=list(spells),
         defend_hp_threshold=defend,
+        trust=max(0, min(100, int(getattr(profile, "starting_trust", 50)))),
+        mood=str(getattr(profile, "personality", "steady")),
+        tactic="balanced",
     )
 
 
@@ -50,6 +53,23 @@ def create_companion(campaign_id: str, companion_id: Optional[str] = None) -> Co
     if not profile:
         raise ValueError(f"Unknown companion '{cid}' in campaign '{campaign_id}'")
     return create_companion_from_profile(profile)
+
+
+def scale_companion_for_level(companion: Companion, player_level: int) -> Companion:
+    """Apply modest archetype-aware scaling to a fresh campaign companion."""
+    gained_levels = max(0, int(player_level) - 1)
+    if gained_levels == 0:
+        return companion
+    hp_per_level = 2 if companion.name == "Torvald" else 1
+    hp_gain = gained_levels * hp_per_level
+    companion.max_hp += hp_gain
+    companion.hp = companion.max_hp
+    companion.attack_bonus += gained_levels // 2
+    companion.ac += gained_levels // 4
+    if companion.max_mana > 0:
+        companion.max_mana += gained_levels
+        companion.mana = companion.max_mana
+    return companion
 
 
 def create_campaign_companions(

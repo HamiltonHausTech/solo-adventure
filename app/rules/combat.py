@@ -6,7 +6,6 @@ from typing import List, Optional
 
 from ..content import get_mob_profile
 from ..state import Enemy, GameState
-from ..util import pick_target_by_hp
 
 from .dice import roll_die, roll_dice
 from .flags import get_flag_dict, get_flag_list, next_corpse_id
@@ -46,11 +45,7 @@ def _select_heal_target(state: GameState, query: Optional[str]) -> tuple[Optiona
         return "companion", None
     if not token:
         player_ratio = state.player.hp / max(1, state.player.max_hp)
-        companion_ratio = (
-            state.companion.hp / max(1, state.companion.max_hp)
-            if state.companion.hp > 0
-            else 1.0
-        )
+        companion_ratio = state.companion.hp / max(1, state.companion.max_hp)
         return "companion" if companion_ratio < player_ratio else "player", None
     if token in state.companion.name.lower():
         return "companion", None
@@ -89,6 +84,15 @@ def apply_player_action(
     if action == "defend":
         state.player_defending = True
         return f"{state.player.name} takes a defensive stance (+2 AC until next attack)."
+    if action == "guard_companion":
+        if state.player.cls != "Fighter":
+            return "Only a fighter can reliably intercept an attack this way."
+        state.player_guarding_companion = True
+        state.player_defending = True
+        return (
+            f"{state.player.name} moves to guard {state.companion.name}, ready to intercept "
+            "the next attack against them (+2 AC)."
+        )
 
     # Spell casting: explicit spell or "special" (auto best damage for casters)
     if spell_name or (action == "special" and is_caster(state.player.cls)):
@@ -122,8 +126,6 @@ def apply_player_action(
                 healed = state.player.hp - old_hp
                 return f"You cast Cure Wounds on yourself, healing {healed} ({detail})."
             companion = state.companion
-            if companion.hp <= 0:
-                return "Your companion is down and cannot be healed."
             old_hp = companion.hp
             companion.hp = min(companion.max_hp, old_hp + amount)
             healed = companion.hp - old_hp
@@ -190,8 +192,10 @@ def apply_player_action(
         return "There's nothing to attack."
 
     special_bonus = 0
-    attack_bonus = state.player.attack_bonus + (1 if state.player_bless_active else 0)
-    damage_expr = state.player.damage
+    from .inventory import equipment_attack_bonus, equipped_damage
+
+    attack_bonus = state.player.attack_bonus + equipment_attack_bonus(state) + (1 if state.player_bless_active else 0)
+    damage_expr = equipped_damage(state)
     flavor = ""
 
     if action == "special":
@@ -219,6 +223,7 @@ def clear_round_buffs(state: GameState) -> None:
     state.player_shield_active = False
     state.player_bless_active = False
     state.companion_bless_active = False
+    state.player_guarding_companion = False
 
 
 def apply_companion_action(state: GameState) -> str:
@@ -228,17 +233,32 @@ def apply_companion_action(state: GameState) -> str:
     if companion.hp <= 0:
         return f"{companion.name} is down and cannot act."
     state.companion_defending = False
-    defend_threshold = getattr(companion, "defend_hp_threshold", 3)
+    tactic = getattr(companion, "tactic", "balanced")
+    alive = [enemy for enemy in state.enemies if enemy.hp > 0]
+    defend_threshold = getattr(companion, "defend_hp_threshold", 3) + (2 if tactic == "cautious" else 0)
+    if tactic == "cautious" and len(alive) > 1:
+        defend_threshold += 2
     if companion.hp <= defend_threshold:
         state.companion_defending = True
         return f"{companion.name} keeps their distance and braces (+2 AC)."
-    target_enemy, error = _select_enemy(state, None)
+    if tactic == "cautious" and state.player.hp <= max(3, state.player.max_hp // 3):
+        state.player_defending = True
+        state.companion_defending = True
+        return f"{companion.name} covers {state.player.name}, granting +2 AC to both until the enemies act."
+    target_enemy = (
+        max(alive, key=lambda enemy: enemy.hp)
+        if alive and tactic == "aggressive"
+        else min(alive, key=lambda enemy: enemy.hp)
+        if alive
+        else None
+    )
+    error = None if target_enemy else "There's nothing to attack."
     if error or not target_enemy:
         return f"{companion.name} scans the room, weapon lowered."
 
     # Caster companion: cast damage spell if mana >= cost and has spell
     spell_name = get_best_damage_spell(companion.learned_spells) if companion.learned_spells else None
-    comp_attack_bonus = companion.attack_bonus + (1 if state.companion_bless_active else 0)
+    comp_attack_bonus = companion.attack_bonus + (1 if state.companion_bless_active else 0) + (1 if tactic == "aggressive" else 0)
     if spell_name and spell_name in SPELL_DAMAGE:
         damage_expr, mana_cost = SPELL_DAMAGE[spell_name]
         if companion.mana >= mana_cost and companion.max_mana > 0:
@@ -261,7 +281,11 @@ def apply_companion_action(state: GameState) -> str:
         target_defending=False,
     )
     if hit:
-        new_hp, detail = _apply_damage(target_enemy.hp, companion.damage)
+        new_hp, detail = _apply_damage(
+            target_enemy.hp,
+            companion.damage,
+            bonus=1 if tactic == "aggressive" else 0,
+        )
         target_enemy.hp = new_hp
         return f"{companion.name} strikes {target_enemy.name} (roll {roll} -> {total}) for {detail} damage."
     return f"{companion.name} misses {target_enemy.name} (roll {roll} -> {total})."
@@ -274,6 +298,7 @@ def apply_enemy_action(state: GameState) -> List[str]:
 
     results: List[str] = []
     companion = state.companion
+    target_counts = {"player": 0, "companion": 0}
     for enemy in alive:
         if getattr(enemy, "asleep", False):
             enemy.asleep = False
@@ -286,10 +311,20 @@ def apply_enemy_action(state: GameState) -> List[str]:
         elif ai == "focus_companion":
             target = "companion" if companion.hp > 0 else "player"
         else:
-            targets = [("player", state.player.hp)]
-            if companion.hp > 0:
-                targets.append(("companion", companion.hp))
-            target = pick_target_by_hp(targets)
+            if companion.hp <= 0:
+                target = "player"
+            else:
+                player_score = state.player.hp / max(1, state.player.max_hp) + target_counts["player"] * 0.75
+                companion_score = companion.hp / max(1, companion.max_hp) + target_counts["companion"] * 0.75
+                target = "companion" if companion_score < player_score else "player"
+
+        if target == "companion" and state.player_guarding_companion and state.player.hp > 0:
+            state.player_guarding_companion = False
+            target = "player"
+            results.append(
+                f"{state.player.name} intercepts an attack meant for {companion.name}."
+            )
+        target_counts[target] += 1
 
         if target == "player":
             ac = state.player.ac + (2 if state.player_shield_active else 0) + (1 if state.player_bless_active else 0)

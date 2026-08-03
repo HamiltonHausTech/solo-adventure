@@ -69,6 +69,44 @@ The game makes **2 API calls per turn** (companion suggestion + GM narration). I
 python3 -m app.main
 ```
 
+## Headless engine and web API
+
+The terminal UI and web clients can share the same authoritative Python rules
+through `HeadlessEngine`. Commands return a client-safe state snapshot plus
+structured events suitable for animation, narration, sound, and replay.
+
+Run the development API:
+
+```bash
+python3 -m app.web_api --port 8000 --database var/solo_adventure.db
+```
+
+Create a game:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/games \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Rowan","class":"Fighter","race":"Human","companion_id":"mara"}'
+```
+
+Resolve a command using the returned `game_id`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/games/GAME_ID/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"move","target":"barracks"}'
+```
+
+Supported endpoints:
+
+- `GET /api/health`
+- `POST /api/games`
+- `GET /api/games/{game_id}`
+- `POST /api/games/{game_id}/commands`
+
+Game sessions are stored in SQLite and survive service restarts. The browser
+keeps only the opaque `game_id`; authoritative state remains in the database.
+
 ## Tests
 ```bash
 python3 -m unittest discover -s tests

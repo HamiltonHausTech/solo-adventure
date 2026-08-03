@@ -4,3 +4,4 @@ venv/
 **/__pycache__/
 characters/*.json
 game_state.json
+var/

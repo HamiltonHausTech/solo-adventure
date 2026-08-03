@@ -8,7 +8,6 @@ from ..state import GameState
 
 from .player import is_caster
 
-
 # XP needed for each level (index 0 = level 1, index 1 = level 2, ...)
 XP_TABLE: List[int] = [0, 100, 250, 500, 1000, 2000, 3500, 5000, 7000, 10000]
 
@@ -53,9 +52,9 @@ def _apply_level_up(state: GameState) -> str:
     """Apply one level-up. Returns message. Defers spell/ability choices to rest."""
     from ..profiles import get_class_profile
 
-    from .spells import get_spell_choices_for_level
-
     state.player.level += 1
+    state.player.unspent_attribute_points += 2
+    state.player.unspent_class_upgrades += 1
     profile = get_class_profile(state.player.cls)
     hp_per_level = getattr(profile, "hp_per_level", 1)
     state.player.max_hp += hp_per_level
@@ -66,17 +65,7 @@ def _apply_level_up(state: GameState) -> str:
         state.player.max_mana += 2
         state.player.mana = state.player.max_mana
 
-    # Defer spell choices until rest
-    choices = get_spell_choices_for_level(
-        state.player.cls,
-        state.player.level,
-        state.player.learned_spells,
+    return (
+        f"Level up! {state.player.name} is now level {state.player.level}. "
+        "Two attribute points and one class upgrade are available in the adventurer hub."
     )
-    if choices:
-        state.pending_level_choices.append({
-            "type": "spell",
-            "choices": choices,
-            "level": state.player.level,
-        })
-
-    return f"Level up! {state.player.name} is now level {state.player.level}."

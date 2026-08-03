@@ -45,9 +45,13 @@ def _handle_social_room(state: GameState, room: Room, action: str) -> Optional[s
         if success and success_flag:
             state.flags[str(success_flag)] = True
         if success and success_msg:
-            return str(success_msg).format(roll=roll, total=total)
+            return str(success_msg).format(
+                roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
+            )
         if not success and fail_msg:
-            return str(fail_msg).format(roll=roll, total=total)
+            return str(fail_msg).format(
+                roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
+            )
         # Fallback if no config messages
         if success:
             return f"You succeed (roll {roll} -> {total})."
