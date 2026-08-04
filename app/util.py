@@ -160,6 +160,11 @@ def load_env_file(path: str) -> None:
             raw = line.strip()
             if not raw or raw.startswith("#") or "=" not in raw:
                 continue
+            # Strip inline comments (e.g. KEY=value  # comment)
+            if "#" in raw:
+                raw = raw.split("#", 1)[0].rstrip()
+                if not raw or "=" not in raw:
+                    continue
             key, value = raw.split("=", 1)
             key = key.strip()
             value = value.strip().strip("\"").strip("'")

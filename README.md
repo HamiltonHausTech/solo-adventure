@@ -14,7 +14,9 @@ pip install -r requirements.txt
 ```
 
 ## Configure the AI (Optional)
-Option A: set an API key in your shell:
+
+### Option A: OpenAI (hosted)
+Set an API key in your shell:
 ```bash
 export OPENAI_API_KEY=YOUR_KEY_HERE
 # Optional (faster models = quicker responses):
@@ -28,7 +30,32 @@ OPENAI_API_KEY=YOUR_KEY_HERE
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_SKIP_COMPANION=1
 ```
-If no key is set, the game runs with a stub GM and companion.
+If no key is set and no local model is configured, the game runs with a stub GM and companion.
+
+### Option B: Local model via Ollama
+If you run [Ollama](https://ollama.com) locally, you can use a local model instead of OpenAI:
+
+```bash
+# Tell the game to use Ollama instead of OpenAI:
+export LLM_PROVIDER=ollama
+
+# Optional: choose the Ollama model (defaults to "gpt-oss"):
+export OLLAMA_MODEL=gpt-oss
+
+# Optional: change the Ollama host (defaults to http://localhost:11434):
+export OLLAMA_HOST=http://localhost:11434
+
+# You can still skip companion calls as with OpenAI:
+export OPENAI_SKIP_COMPANION=1
+```
+or in `.env`:
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=gpt-oss
+OLLAMA_HOST=http://localhost:11434
+OPENAI_SKIP_COMPANION=1
+```
+With `LLM_PROVIDER=ollama`, no `OPENAI_API_KEY` is required.
 
 ### Rate limits and debugging
 The game makes **2 API calls per turn** (companion suggestion + GM narration). If you hit rate limits:
@@ -41,6 +68,44 @@ The game makes **2 API calls per turn** (companion suggestion + GM narration). I
 ```bash
 python3 -m app.main
 ```
+
+## Headless engine and web API
+
+The terminal UI and web clients can share the same authoritative Python rules
+through `HeadlessEngine`. Commands return a client-safe state snapshot plus
+structured events suitable for animation, narration, sound, and replay.
+
+Run the development API:
+
+```bash
+python3 -m app.web_api --port 8000 --database var/solo_adventure.db
+```
+
+Create a game:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/games \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Rowan","class":"Fighter","race":"Human","companion_id":"mara"}'
+```
+
+Resolve a command using the returned `game_id`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/games/GAME_ID/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"move","target":"barracks"}'
+```
+
+Supported endpoints:
+
+- `GET /api/health`
+- `POST /api/games`
+- `GET /api/games/{game_id}`
+- `POST /api/games/{game_id}/commands`
+
+Game sessions are stored in SQLite and survive service restarts. The browser
+keeps only the opaque `game_id`; authoritative state remains in the database.
 
 ## Tests
 ```bash

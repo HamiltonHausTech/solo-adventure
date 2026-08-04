@@ -21,11 +21,15 @@ class Character:
     max_mana: int
     attack_bonus: int
     damage: str
+    sex: str = "Unspecified"
     spark_uses: int = 0
     gold: int = 0
     xp: int = 0
     level: int = 1
     learned_spells: List[str] = field(default_factory=list)
+    unspent_attribute_points: int = 0
+    unspent_class_upgrades: int = 0
+    chosen_upgrades: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         return {
@@ -41,11 +45,15 @@ class Character:
             "max_mana": self.max_mana,
             "attack_bonus": self.attack_bonus,
             "damage": self.damage,
+            "sex": self.sex,
             "spark_uses": self.spark_uses,
             "gold": self.gold,
             "xp": self.xp,
             "level": self.level,
             "learned_spells": list(self.learned_spells),
+            "unspent_attribute_points": self.unspent_attribute_points,
+            "unspent_class_upgrades": self.unspent_class_upgrades,
+            "chosen_upgrades": list(self.chosen_upgrades),
         }
 
     @staticmethod
@@ -62,6 +70,8 @@ class Character:
             learned = list(profile.spells) if profile.spells else []
         elif not isinstance(learned, list):
             learned = []
+        level = int(data.get("level", 1))
+        legacy_rewards = "unspent_attribute_points" not in data
         return Character(
             name=data["name"],
             race=data.get("race", "Human"),
@@ -75,11 +85,21 @@ class Character:
             max_mana=int(data.get("max_mana", 0)),
             attack_bonus=int(data["attack_bonus"]),
             damage=data["damage"],
+            sex=str(data.get("sex", "Unspecified")),
             spark_uses=int(data.get("spark_uses", 0)),
             gold=int(data.get("gold", 0)),
             xp=int(data.get("xp", 0)),
-            level=int(data.get("level", 1)),
+            level=level,
             learned_spells=learned,
+            unspent_attribute_points=max(
+                0,
+                int(data.get("unspent_attribute_points", (level - 1) * 2 if legacy_rewards else 0)),
+            ),
+            unspent_class_upgrades=max(
+                0,
+                int(data.get("unspent_class_upgrades", level - 1 if legacy_rewards else 0)),
+            ),
+            chosen_upgrades=list(data.get("chosen_upgrades", [])),
         )
 
 
@@ -120,6 +140,10 @@ class Companion(Mob):
     max_mana: int = 0
     learned_spells: List[str] = field(default_factory=list)
     defend_hp_threshold: int = 3
+    trust: int = 50
+    mood: str = "steady"
+    tactic: str = "balanced"
+    memories: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         base = super().to_dict()
@@ -127,6 +151,10 @@ class Companion(Mob):
         base["max_mana"] = self.max_mana
         base["learned_spells"] = list(self.learned_spells)
         base["defend_hp_threshold"] = self.defend_hp_threshold
+        base["trust"] = self.trust
+        base["mood"] = self.mood
+        base["tactic"] = self.tactic
+        base["memories"] = list(self.memories)
         return base
 
     @classmethod
@@ -142,6 +170,10 @@ class Companion(Mob):
             max_mana=int(data.get("max_mana", 0)),
             learned_spells=list(data.get("learned_spells", [])),
             defend_hp_threshold=int(data.get("defend_hp_threshold", 3)),
+            trust=max(0, min(100, int(data.get("trust", 50)))),
+            mood=str(data.get("mood", "steady")),
+            tactic=str(data.get("tactic", "balanced")),
+            memories=list(data.get("memories", []))[-20:],
         )
 
 
@@ -178,6 +210,7 @@ class GameState:
     flags: Dict[str, Any] = field(default_factory=dict)
     inventory: List[Dict[str, Any]] = field(default_factory=list)
     equipment: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=lambda: {
+        "weapon": None,
         "head": None,
         "arms": None,
         "hands": None,
@@ -195,12 +228,14 @@ class GameState:
     response_log: List[Dict[str, Any]] = field(default_factory=list)
     player_defending: bool = False
     companion_defending: bool = False
+    player_guarding_companion: bool = False
     player_shield_active: bool = False
     player_bless_active: bool = False
     companion_bless_active: bool = False
     game_over: bool = False
     rest_streak: int = 0
     pending_level_choices: List[Dict[str, Any]] = field(default_factory=list)
+    adventurer_id: Optional[str] = None
 
     @property
     def companion(self) -> Companion:
@@ -229,12 +264,14 @@ class GameState:
             "response_log": list(self.response_log[-50:]),
             "player_defending": self.player_defending,
             "companion_defending": self.companion_defending,
+            "player_guarding_companion": self.player_guarding_companion,
             "player_shield_active": self.player_shield_active,
             "player_bless_active": self.player_bless_active,
             "companion_bless_active": self.companion_bless_active,
             "game_over": self.game_over,
             "rest_streak": self.rest_streak,
             "pending_level_choices": list(self.pending_level_choices),
+            "adventurer_id": self.adventurer_id,
         }
 
     @staticmethod
@@ -244,7 +281,14 @@ class GameState:
         inventory: List[Dict[str, Any]] = []
         for item in raw_inventory:
             if isinstance(item, dict):
-                inventory.append(item)
+                item_id = str(item.get("id", ""))
+                current = item_from_name(campaign_id, str(item.get("name", item_id)))
+                if item_id:
+                    from .content import item_from_id
+
+                    current = item_from_id(campaign_id, item_id)
+                current.update(item)
+                inventory.append(current)
             elif isinstance(item, str):
                 inventory.append(item_from_name(campaign_id, item))
         if not inventory and raw_inventory:
@@ -252,7 +296,7 @@ class GameState:
         equipment = data.get("equipment")
         if not isinstance(equipment, dict):
             equipment = {}
-        for slot in ["head", "arms", "hands", "chest", "legs", "feet"]:
+        for slot in ["weapon", "head", "arms", "hands", "chest", "legs", "feet"]:
             equipment.setdefault(slot, None)
         enemies = [Enemy.from_dict(item) for item in data.get("enemies", [])]
         if not enemies and data.get("enemy"):
@@ -262,7 +306,7 @@ class GameState:
             companions = [Companion.from_dict(c) for c in raw_companions]
         else:
             companions = [Companion.from_dict(data["companion"])]
-        return GameState(
+        state = GameState(
             campaign_id=campaign_id,
             player=Character.from_dict(data["player"]),
             room_id=data["room_id"],
@@ -281,13 +325,22 @@ class GameState:
             response_log=list(data.get("response_log", [])[-50:]),
             player_defending=bool(data.get("player_defending", False)),
             companion_defending=bool(data.get("companion_defending", False)),
+            player_guarding_companion=bool(data.get("player_guarding_companion", False)),
             player_shield_active=bool(data.get("player_shield_active", False)),
             player_bless_active=bool(data.get("player_bless_active", False)),
             companion_bless_active=bool(data.get("companion_bless_active", False)),
             game_over=bool(data.get("game_over", False)),
             rest_streak=int(data.get("rest_streak", 0)),
-            pending_level_choices=list(data.get("pending_level_choices", [])),
+            pending_level_choices=[
+                choice for choice in data.get("pending_level_choices", [])
+                if isinstance(choice, dict) and choice.get("type") != "spell"
+            ],
+            adventurer_id=data.get("adventurer_id"),
         )
+        from .rules.inventory import normalize_inventory
+
+        normalize_inventory(state)
+        return state
 
 
 SAVE_VERSION = 1

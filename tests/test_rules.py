@@ -9,20 +9,27 @@ from app.profiles import apply_race_mods
 from app.profiles import CompanionProfile
 from app.rules import (
     add_item_to_inventory,
+    apply_progression_choices,
     apply_companion_action,
     apply_exploration_action,
     apply_enemy_action,
     apply_player_action,
     apply_rest,
+    buy_healing_potions,
+    buy_shop_item,
     create_companion,
     create_companion_from_profile,
     create_enemy,
     create_enemies,
     create_player,
+    drop_item,
     regen_mana,
     end_combat_if_needed,
     equip_item,
+    equipped_damage,
     reset_rest_streak,
+    scale_companion_for_level,
+    sell_item,
     sync_player_ac,
     unequip_item,
     use_item,
@@ -176,6 +183,63 @@ class RulesTests(unittest.TestCase):
         self.assertGreater(state.companion.hp, 4)
         self.assertEqual(state.inventory, [])
 
+    def test_potion_revives_downed_companion(self) -> None:
+        state = self.make_state()
+        state.inventory = [item_from_id("ruined_watchtower", "healing_potion")]
+        state.companion.hp = 0
+        with patch("app.rules.dice.roll_die", return_value=3):
+            used, result = use_item(state, "potion", state.companion.name)
+        self.assertTrue(used)
+        self.assertIn("healing", result.lower())
+        self.assertGreater(state.companion.hp, 0)
+        self.assertEqual(state.inventory, [])
+
+    def test_untargeted_potion_prioritizes_downed_companion(self) -> None:
+        state = self.make_state()
+        state.inventory = [item_from_id("ruined_watchtower", "healing_potion")]
+        state.player.hp = state.player.max_hp - 2
+        state.companion.hp = 0
+        with patch("app.rules.dice.roll_die", return_value=3):
+            used, result = use_item(state, "potion")
+        self.assertTrue(used)
+        self.assertIn(state.companion.name, result)
+        self.assertGreater(state.companion.hp, 0)
+
+    def test_use_one_of_multiple_identical_potions(self) -> None:
+        state = self.make_state()
+        state.inventory = [
+            item_from_id("ruined_watchtower", "healing_potion"),
+            item_from_id("ruined_watchtower", "healing_potion"),
+            item_from_id("ruined_watchtower", "healing_potion"),
+        ]
+        state.player.hp = 5
+        with patch("app.rules.dice.roll_die", return_value=3):
+            used, result = use_item(state, "healing potion", "me")
+        self.assertTrue(used)
+        self.assertIn("healing", result.lower())
+        self.assertEqual(len(state.inventory), 1)
+        self.assertEqual(state.inventory[0]["quantity"], 2)
+
+    def test_potion_targets_companion_by_dynamic_name(self) -> None:
+        state = self.make_state()
+        state.inventory = [item_from_id("ruined_watchtower", "healing_potion")]
+        state.companion.name = "Torvald"
+        state.companion.hp = 3
+        with patch("app.rules.dice.roll_die", return_value=3):
+            used, result = use_item(state, "healing potion", "torvald")
+        self.assertTrue(used)
+        self.assertIn("Torvald", result)
+        self.assertGreater(state.companion.hp, 3)
+
+    def test_potion_is_not_consumed_at_full_health(self) -> None:
+        state = self.make_state()
+        state.inventory = [item_from_id("ruined_watchtower", "healing_potion")]
+        state.player.hp = state.player.max_hp
+        used, result = use_item(state, "healing potion", "me")
+        self.assertFalse(used)
+        self.assertIn("full health", result.lower())
+        self.assertEqual(len(state.inventory), 1)
+
     def test_use_item_missing(self) -> None:
         state = self.make_state()
         used, result = use_item(state, "potion")
@@ -185,8 +249,8 @@ class RulesTests(unittest.TestCase):
     def test_inventory_limit_blocks_general_item(self) -> None:
         state = self.make_state()
         state.inventory_limit = 1
-        first = item_from_id("ruined_watchtower", "healing_potion")
-        second = item_from_id("ruined_watchtower", "healing_potion")
+        first = item_from_id("ruined_watchtower", "leather_cap")
+        second = item_from_id("ruined_watchtower", "worn_boots")
         added, _ = add_item_to_inventory(state, first)
         self.assertTrue(added)
         added, message = add_item_to_inventory(state, second)
@@ -199,6 +263,88 @@ class RulesTests(unittest.TestCase):
         quest = item_from_id("ruined_watchtower", "silver_locket")
         added, _ = add_item_to_inventory(state, quest)
         self.assertTrue(added)
+
+    def test_stackable_item_can_join_stack_when_pack_is_full(self) -> None:
+        state = self.make_state()
+        state.inventory_limit = 1
+        potion = item_from_id("ruined_watchtower", "healing_potion")
+        added, _ = add_item_to_inventory(state, potion)
+        self.assertTrue(added)
+        added, _ = add_item_to_inventory(state, potion)
+        self.assertTrue(added)
+        self.assertEqual(len(state.inventory), 1)
+        self.assertEqual(state.inventory[0]["quantity"], 2)
+
+    def test_consumable_stack_limit_rejects_excess_purchase(self) -> None:
+        state = self.make_state()
+        potion = item_from_id("ruined_watchtower", "healing_potion")
+        potion["quantity"] = 9
+        state.inventory = [potion]
+        state.player.gold = 100
+        accepted, message = buy_healing_potions(state, 3)
+        self.assertFalse(accepted)
+        self.assertIn("at most 10", message)
+        self.assertEqual(state.inventory[0]["quantity"], 9)
+        self.assertEqual(state.player.gold, 100)
+
+    def test_buy_potions_adds_to_stack_and_spends_gold(self) -> None:
+        state = self.make_state()
+        state.player.gold = 30
+        state.inventory = [item_from_id("ruined_watchtower", "healing_potion")]
+        accepted, message = buy_healing_potions(state, 3)
+        self.assertTrue(accepted)
+        self.assertIn("24 gold", message)
+        self.assertEqual(state.player.gold, 6)
+        self.assertEqual(state.inventory[0]["quantity"], 4)
+
+    def test_sell_equipment_adds_gold(self) -> None:
+        state = self.make_state()
+        armor = item_from_id("ruined_watchtower", "leather_cap")
+        state.inventory = [armor]
+        accepted, message = sell_item(state, "leather cap")
+        self.assertTrue(accepted)
+        self.assertIn("8 gold", message)
+        self.assertEqual(state.player.gold, 8)
+        self.assertEqual(state.inventory, [])
+
+    def test_shop_weapon_can_be_bought_and_equipped(self) -> None:
+        state = self.make_state()
+        state.player.gold = 40
+        accepted, _ = buy_shop_item(state, "duelist_knife")
+        self.assertTrue(accepted)
+        self.assertEqual(state.player.gold, 12)
+        equipped, _ = equip_item(state, "duelist's knife")
+        self.assertTrue(equipped)
+        self.assertEqual(state.equipment["weapon"]["id"], "duelist_knife")
+        self.assertEqual(equipped_damage(state), "1d6+1")
+
+    def test_drop_item_frees_inventory_space(self) -> None:
+        state = self.make_state()
+        armor = item_from_id("ruined_watchtower", "leather_cap")
+        state.inventory = [armor]
+        dropped, message = drop_item(state, "leather cap")
+        self.assertTrue(dropped)
+        self.assertIn("drop", message.lower())
+        self.assertEqual(state.inventory, [])
+
+    def test_quest_item_cannot_be_dropped(self) -> None:
+        state = self.make_state()
+        quest = item_from_id("ruined_watchtower", "silver_locket")
+        state.inventory = [quest]
+        dropped, message = drop_item(state, "silver locket")
+        self.assertFalse(dropped)
+        self.assertIn("cannot", message.lower())
+        self.assertEqual(state.inventory, [quest])
+
+    def test_greyfen_item_drop_chance_can_yield_only_gold(self) -> None:
+        from app.rules.inventory import roll_loot
+
+        with patch("app.rules.inventory.roll_dice", return_value=(5, "5")), patch(
+            "app.rules.inventory.roll_die", return_value=100
+        ):
+            gold, item_id = roll_loot("embers_of_greyfen", "Thornbound Dead")
+        self.assertEqual(gold, 5)
+        self.assertIsNone(item_id)
 
     def test_equipment_slots_initialized(self) -> None:
         state = self.make_state()
@@ -386,8 +532,10 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(state.player.xp, 100)
         self.assertEqual(state.player.level, 2)
         self.assertIn("Level up", msgs[0])
+        self.assertEqual(state.player.unspent_attribute_points, 2)
+        self.assertEqual(state.player.unspent_class_upgrades, 1)
 
-    def test_wizard_level_up_adds_pending_spell_choice(self) -> None:
+    def test_wizard_level_up_moves_choices_to_hub(self) -> None:
         wizard = create_player("Mage", "Wizard", {"STR": 0, "DEX": 1, "INT": 2})
         state = GameState(
             campaign_id="ruined_watchtower",
@@ -399,9 +547,51 @@ class RulesTests(unittest.TestCase):
         state.player.level = 1
         grant_xp(state, 100)
         self.assertEqual(state.player.level, 2)
-        self.assertEqual(len(state.pending_level_choices), 1)
-        self.assertEqual(state.pending_level_choices[0]["type"], "spell")
-        self.assertIn("Magic Missile", state.pending_level_choices[0]["choices"])
+        self.assertEqual(state.pending_level_choices, [])
+        self.assertEqual(state.player.unspent_attribute_points, 2)
+        self.assertEqual(state.player.unspent_class_upgrades, 1)
+
+    def test_progression_applies_attributes_and_upgrade_atomically(self) -> None:
+        state = self.make_state()
+        state.player.unspent_attribute_points = 2
+        state.player.unspent_class_upgrades = 1
+        old_hp = state.player.max_hp
+        old_attack = state.player.attack_bonus
+        old_con = state.player.stats["CON"]
+        accepted, message = apply_progression_choices(
+            state, {"CON": 1, "STR": 1}, "precision"
+        )
+        self.assertTrue(accepted)
+        self.assertIn("confirmed", message.lower())
+        self.assertEqual(state.player.stats["CON"], old_con + 1)
+        self.assertEqual(state.player.max_hp, old_hp + 1)
+        self.assertEqual(state.player.attack_bonus, old_attack + 1)
+        self.assertEqual(state.player.unspent_attribute_points, 0)
+        self.assertEqual(state.player.unspent_class_upgrades, 0)
+
+    def test_progression_rejects_attribute_above_cap_without_changes(self) -> None:
+        state = self.make_state()
+        state.player.stats["STR"] = 6
+        state.player.unspent_attribute_points = 2
+        before = dict(state.player.stats)
+        accepted, message = apply_progression_choices(state, {"STR": 1}, "")
+        self.assertFalse(accepted)
+        self.assertIn("cannot exceed", message.lower())
+        self.assertEqual(state.player.stats, before)
+        self.assertEqual(state.player.unspent_attribute_points, 2)
+
+    def test_caster_can_learn_spell_as_class_upgrade(self) -> None:
+        wizard = create_player("Mage", "Wizard", {"STR": 0, "DEX": 1, "INT": 2})
+        wizard.unspent_class_upgrades = 1
+        state = GameState(
+            campaign_id="ruined_watchtower",
+            player=wizard,
+            room_id="courtyard",
+            companions=[create_companion("ruined_watchtower")],
+        )
+        accepted, _ = apply_progression_choices(state, {}, "learn:Magic Missile")
+        self.assertTrue(accepted)
+        self.assertIn("Magic Missile", state.player.learned_spells)
 
     def test_rest_resolves_pending_spell_choice(self) -> None:
         wizard = create_player("Mage", "Wizard", {"STR": 0, "DEX": 1, "INT": 2})
@@ -451,6 +641,70 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(state.rest_streak, 1)
         reset_rest_streak(state)
         self.assertEqual(state.rest_streak, 0)
+
+    def test_cautious_companion_covers_wounded_player(self) -> None:
+        state = self.make_state()
+        state.player.hp = 2
+        state.companion.tactic = "cautious"
+        state.enemies = [create_enemy("ruined_watchtower", "Watchtower Bandit")]
+        result = apply_companion_action(state)
+        self.assertIn("covers", result.lower())
+        self.assertTrue(state.player_defending)
+        self.assertTrue(state.companion_defending)
+
+    def test_companion_scaling_is_modest_and_archetype_aware(self) -> None:
+        eldrin = create_companion("embers_of_greyfen", "eldrin")
+        scale_companion_for_level(eldrin, 6)
+        self.assertEqual(eldrin.max_hp, 14)
+        self.assertEqual(eldrin.ac, 13)
+        self.assertEqual(eldrin.attack_bonus, 4)
+        self.assertEqual(eldrin.max_mana, 12)
+
+    def test_fighter_guard_intercepts_companion_attack(self) -> None:
+        state = self.make_state()
+        state.campaign_id = "embers_of_greyfen"
+        state.room_id = "marsh_path"
+        state.enemies = create_enemies("embers_of_greyfen", "Bog Hounds")[:1]
+        state.companion.hp = 1
+        companion_hp = state.companion.hp
+        player_hp = state.player.hp
+        apply_player_action(state, "guard_companion")
+        with patch("app.rules.combat.roll_die", return_value=20), patch(
+            "app.rules.dice.roll_die", return_value=2
+        ):
+            messages = apply_enemy_action(state)
+        self.assertTrue(any("intercepts" in message for message in messages))
+        self.assertEqual(state.companion.hp, companion_hp)
+        self.assertLess(state.player.hp, player_hp)
+
+    def test_ordinary_enemy_group_spreads_attacks(self) -> None:
+        state = self.make_state()
+        state.campaign_id = "embers_of_greyfen"
+        state.room_id = "marsh_path"
+        state.enemies = create_enemies("embers_of_greyfen", "Bog Hounds")
+        player_hp = state.player.hp
+        companion_hp = state.companion.hp
+        with patch("app.rules.combat.roll_die", return_value=20), patch(
+            "app.rules.dice.roll_die", return_value=1
+        ):
+            apply_enemy_action(state)
+        self.assertLess(state.player.hp, player_hp)
+        self.assertLess(state.companion.hp, companion_hp)
+
+    def test_aggressive_companion_targets_strongest_enemy(self) -> None:
+        state = self.make_state()
+        state.companion.tactic = "aggressive"
+        weak = create_enemy("ruined_watchtower", "Watchtower Bandit")
+        strong = create_enemy("ruined_watchtower", "Watchtower Bandit")
+        weak.hp = 2
+        strong.hp = 10
+        state.enemies = [weak, strong]
+        with patch("app.rules.combat.roll_die", return_value=20), patch(
+            "app.rules.dice.roll_die", return_value=2
+        ):
+            apply_companion_action(state)
+        self.assertEqual(weak.hp, 2)
+        self.assertLess(strong.hp, 10)
 
 
 if __name__ == "__main__":

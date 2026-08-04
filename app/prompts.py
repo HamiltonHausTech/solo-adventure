@@ -16,8 +16,9 @@ GM_SYSTEM_PROMPT = (
 )
 
 COMPANION_SYSTEM_PROMPT = (
-    "You are Mara, a cautious archer companion. Give a short, practical suggestion (1 sentence) "
-    "based on the current situation. Do NOT narrate outcomes or change the game state. "
+    "You are the player's cautious companion in a tiny solo fantasy adventure. "
+    "Give a short, practical suggestion (1 sentence) based on the current situation, "
+    "using only the state summary you are given. Do NOT narrate outcomes or change the game state. "
     "Only suggest actions that are actually available. "
     "Vary your suggestions: movement, exploration (talk/search), combat actions, or rest—whatever fits best. "
     "Only suggest healing or potions when someone is wounded (HP below max) and it would help. "
@@ -56,7 +57,7 @@ def format_state_for_companion(state: GameState) -> str:
     parts = [
         f"Room: {room.name} ({room.kind})",
         f"Player Level {state.player.level} HP {state.player.hp}/{state.player.max_hp}",
-        f"Mara HP {state.companion.hp}/{state.companion.max_hp}",
+        f"{state.companion.name} HP {state.companion.hp}/{state.companion.max_hp}",
         f"Mana: {state.player.mana}/{state.player.max_mana}",
         f"Gold: {state.player.gold}",
         f"Inventory: {', '.join(inventory_names(state.inventory)) if state.inventory else '(empty)'}",

@@ -59,6 +59,40 @@ class CompanionProfile:
     mana: int = 0
     max_mana: int = 0
     spells: List[str] = field(default_factory=list)  # for caster companions
+    personality: str = "steady"
+    starting_trust: int = 50
+
+
+COMPANION_ARCHETYPES: Dict[str, Dict[str, str]] = {
+    "eldrin": {
+        "role": "Arcane Support",
+        "description": "A fragile ranged spellcaster who turns mana into reliable magical damage.",
+        "best_for": "Durable adventurers who can keep pressure away from him.",
+    },
+    "mara": {
+        "role": "Cautious Skirmisher",
+        "description": "A flexible combatant who watches vulnerable targets and adapts to the fight.",
+        "best_for": "Most parties, especially adventurers who value balanced support.",
+    },
+    "torvald": {
+        "role": "Stalwart Defender",
+        "description": "A durable frontline fighter built to endure danger and cover wounded allies.",
+        "best_for": "Fragile, ranged, or spellcasting adventurers who need protection.",
+    },
+}
+
+
+def get_companion_archetype(companion_id: str) -> Dict[str, str]:
+    return dict(
+        COMPANION_ARCHETYPES.get(
+            companion_id,
+            {
+                "role": "Traveling Companion",
+                "description": "A capable ally who acts after the adventurer each round.",
+                "best_for": "Adventurers looking for dependable support.",
+            },
+        )
+    )
 
 
 CLASS_PROFILES: Dict[str, ClassProfile] = {
