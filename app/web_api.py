@@ -7,6 +7,7 @@ import json
 import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock, RLock
 from typing import Any, Dict
 from uuid import uuid4
 
@@ -19,6 +20,13 @@ from .storage import GameStore
 
 SESSIONS: Dict[str, HeadlessEngine] = {}
 STORE: GameStore | None = None
+RESOURCE_LOCKS: Dict[str, RLock] = {}
+RESOURCE_LOCKS_GUARD = Lock()
+
+
+def _resource_lock(resource_id: str) -> RLock:
+    with RESOURCE_LOCKS_GUARD:
+        return RESOURCE_LOCKS.setdefault(resource_id, RLock())
 
 
 def _load_session(game_id: str) -> HeadlessEngine | None:
@@ -248,14 +256,6 @@ class GameAPIHandler(BaseHTTPRequestHandler):
                 self._send(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": message})
                 return
             STORE.save_adventurer(engine)
-            from .state import Character
-
-            for session in SESSIONS.values():
-                if session.state.adventurer_id != adventurer_id:
-                    continue
-                session.state.player = Character.from_dict(engine.state.player.to_dict())
-                session.state.inventory = list(engine.state.inventory)
-                session.state.equipment = dict(engine.state.equipment)
             self._send(
                 HTTPStatus.OK,
                 {"message": message, "adventurer": STORE.get_adventurer(adventurer_id)},
@@ -264,22 +264,23 @@ class GameAPIHandler(BaseHTTPRequestHandler):
 
         if self.path.endswith("/commands") and self.path.startswith("/api/games/"):
             session_id = self.path.removeprefix("/api/games/").split("/", 1)[0]
-            engine = _load_session(session_id)
-            if not engine:
-                self._send(HTTPStatus.NOT_FOUND, {"error": "Game not found."})
-                return
-            command = str(payload.get("command", "")).strip()
-            if not command:
-                self._send(HTTPStatus.BAD_REQUEST, {"error": "Command is required."})
-                return
-            result = engine.execute(
-                command,
-                target=payload.get("target"),
-                spell=payload.get("spell"),
-                item=payload.get("item"),
-            )
-            if result.accepted:
-                _save_session(session_id, engine)
+            with _resource_lock(f"game:{session_id}"):
+                engine = _load_session(session_id)
+                if not engine:
+                    self._send(HTTPStatus.NOT_FOUND, {"error": "Game not found."})
+                    return
+                command = str(payload.get("command", "")).strip()
+                if not command:
+                    self._send(HTTPStatus.BAD_REQUEST, {"error": "Command is required."})
+                    return
+                result = engine.execute(
+                    command,
+                    target=payload.get("target"),
+                    spell=payload.get("spell"),
+                    item=payload.get("item"),
+                )
+                if result.accepted:
+                    _save_session(session_id, engine)
             status = HTTPStatus.OK if result.accepted else HTTPStatus.UNPROCESSABLE_ENTITY
             self._send(status, {"game_id": session_id, **result.to_dict()})
             return

@@ -354,6 +354,8 @@ class HeadlessEngine:
                 normalized = "special"
             if normalized not in {"attack", "defend", "special", "guard_companion"}:
                 return self._rejected(command, "That action is not available during combat.")
+            if normalized == "guard_companion" and self.state.player.cls != "Fighter":
+                return self._rejected(command, "Only a fighter can guard a companion.")
             messages.append(apply_player_action(self.state, normalized, target, spell))
             messages.extend(self._resolve_other_combatants())
         else:

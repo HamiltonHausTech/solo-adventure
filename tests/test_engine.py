@@ -199,6 +199,16 @@ class HeadlessEngineTests(unittest.TestCase):
         actions = {action["id"] for action in fresh.available_actions()}
         self.assertIn("guard_companion", actions)
 
+    def test_non_fighter_guard_is_rejected_without_advancing_turn(self) -> None:
+        engine = HeadlessEngine.new(player_class="Rogue")
+        engine.state.in_combat = True
+        before_hp = engine.state.player.hp
+        result = engine.execute("guard_companion")
+        self.assertFalse(result.accepted)
+        self.assertEqual(engine.state.turn, 0)
+        self.assertEqual(engine.state.player.hp, before_hp)
+        self.assertIn("fighter", result.error.lower())
+
 
 class GameStoreTests(unittest.TestCase):
     def test_adventurer_has_stable_record_independent_of_session(self) -> None:
@@ -219,7 +229,7 @@ class GameStoreTests(unittest.TestCase):
             self.assertEqual(fresh.state.adventurer_id, adventurer_id)
             self.assertEqual(len(store.list_adventurers()), 1)
 
-    def test_hub_progression_propagates_to_existing_adventure_saves(self) -> None:
+    def test_hub_changes_do_not_rewrite_existing_adventure_saves(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = GameStore(os.path.join(directory, "games.db"))
             engine = HeadlessEngine.new(name="Synchronized Hero")
@@ -228,10 +238,14 @@ class GameStoreTests(unittest.TestCase):
             profile.state.player.unspent_attribute_points = 2
             profile.state.player.stats["CON"] += 1
             profile.state.player.max_hp += 1
+            profile.state.player.gold = 99
             store.save_adventurer(profile)
             restored = store.load("existing-game")
-            self.assertEqual(restored.state.player.stats["CON"], profile.state.player.stats["CON"])
-            self.assertEqual(restored.state.player.max_hp, profile.state.player.max_hp)
+            self.assertNotEqual(restored.state.player.stats["CON"], profile.state.player.stats["CON"])
+            self.assertNotEqual(restored.state.player.max_hp, profile.state.player.max_hp)
+            self.assertEqual(restored.state.player.gold, 0)
+            updated_profile = store.load_adventurer(str(engine.state.adventurer_id))
+            self.assertEqual(updated_profile.state.player.gold, 99)
 
     def test_session_survives_a_new_store_instance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -255,7 +269,7 @@ class GameStoreTests(unittest.TestCase):
             self.assertEqual(sessions[0]["status"], "in_progress")
             self.assertEqual(sessions[0]["level"], 1)
 
-    def test_list_adventurers_deduplicates_character_sessions(self) -> None:
+    def test_same_character_traits_create_distinct_adventurers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = GameStore(os.path.join(directory, "games.db"))
             first = HeadlessEngine.new(name="Returning Hero")
@@ -265,9 +279,9 @@ class GameStoreTests(unittest.TestCase):
             second.state.player.xp = 75
             store.save("new-game", second)
             adventurers = store.list_adventurers()
-            self.assertEqual(len(adventurers), 1)
-            self.assertEqual(adventurers[0]["name"], "Returning Hero")
-            self.assertEqual(adventurers[0]["xp"], 75)
+            self.assertEqual(len(adventurers), 2)
+            self.assertNotEqual(first.state.adventurer_id, second.state.adventurer_id)
+            self.assertEqual({item["xp"] for item in adventurers}, {25, 75})
 
     def test_saved_adventurer_starts_fresh_campaign_with_progression(self) -> None:
         source = HeadlessEngine.new(name="Veteran")

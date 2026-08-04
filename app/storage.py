@@ -66,7 +66,12 @@ class GameStore:
 
     @staticmethod
     def _identity_key(state: Dict[str, Any]) -> str:
+        adventurer_id = str(state.get("adventurer_id", "")).strip()
+        if adventurer_id:
+            return f"id:{adventurer_id}"
         player = state.get("player") if isinstance(state.get("player"), dict) else {}
+        # Name-based identity is retained only for migrating legacy sessions
+        # that predate stable adventurer IDs.
         return "|".join(
             str(player.get(key, "")).strip().casefold()
             for key in ("name", "race", "cls")
@@ -121,16 +126,10 @@ class GameStore:
         now = datetime.now(timezone.utc).isoformat()
         with closing(self._connect()) as connection:
             with connection:
-                identity = self._identity_key(engine.state.to_dict())
                 if not engine.state.adventurer_id:
-                    existing = connection.execute(
-                        "SELECT adventurer_id FROM adventurers WHERE identity_key = ?",
-                        (identity,),
-                    ).fetchone()
-                    engine.state.adventurer_id = (
-                        str(existing["adventurer_id"]) if existing else str(uuid4())
-                    )
+                    engine.state.adventurer_id = str(uuid4())
                 state = engine.state.to_dict()
+                identity = self._identity_key(state)
                 serialized = json.dumps(state, separators=(",", ":"))
                 connection.execute(
                     """
@@ -202,24 +201,6 @@ class GameStore:
                     """,
                     (identity, engine.state.player.name, serialized, now, engine.state.adventurer_id),
                 )
-                rows = connection.execute(
-                    "SELECT game_id, state_json FROM game_sessions"
-                ).fetchall()
-                for row in rows:
-                    session_state = json.loads(str(row["state_json"]))
-                    if session_state.get("adventurer_id") != engine.state.adventurer_id:
-                        continue
-                    session_state["player"] = state["player"]
-                    session_state["inventory"] = state["inventory"]
-                    session_state["equipment"] = state["equipment"]
-                    connection.execute(
-                        "UPDATE game_sessions SET state_json = ?, updated_at = ? WHERE game_id = ?",
-                        (
-                            json.dumps(session_state, separators=(",", ":")),
-                            now,
-                            row["game_id"],
-                        ),
-                    )
 
     def load(self, game_id: str) -> Optional[HeadlessEngine]:
         with closing(self._connect()) as connection:
