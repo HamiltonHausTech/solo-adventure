@@ -87,6 +87,8 @@ class GameAPIHandler(BaseHTTPRequestHandler):
                         "id": campaign.campaign_id,
                         "name": campaign.name,
                         "description": campaign.description,
+                        "recommended_level": campaign.recommended_level,
+                        "max_item_tier": campaign.max_item_tier,
                         "companions": [
                             {
                                 "id": profile.companion_id,

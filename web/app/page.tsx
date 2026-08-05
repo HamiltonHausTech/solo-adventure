@@ -62,6 +62,8 @@ type EngineState = {
     id: string;
     name: string;
     description: string;
+    recommended_level: number;
+    max_item_tier: number;
     kind: string;
     exits: Record<string, string>;
   };
@@ -176,6 +178,14 @@ type SavedAdventure = {
   updated_at: string;
 };
 
+type ShopTab = "weapons" | "armor" | "consumables" | "sell";
+type PendingPurchase = {
+  label: string;
+  price: number;
+  command: "buy_item" | "buy_potions";
+  options: { item?: string; quantity?: number };
+};
+
 const DEFAULT_SETUP: Setup = {
   name: "Rowan",
   sex: "Male",
@@ -209,7 +219,12 @@ function meter(value: number, max: number) {
 
 function itemStats(item: Item | null | undefined) {
   if (!item?.effect) return item?.kind === "quest" ? "Campaign item" : "No combat effect";
-  if (item.effect.type === "ac") return `+${item.effect.bonus || 0} Armor`;
+  if (item.effect.type === "ac") {
+    const stats = [];
+    if (item.effect.bonus) stats.push(`+${item.effect.bonus} Armor`);
+    if (item.effect.attack_bonus) stats.push(`+${item.effect.attack_bonus} attack`);
+    return stats.join(" · ") || "No combat bonus";
+  }
   if (item.effect.type === "weapon") return `${item.effect.damage || "—"} damage${item.effect.attack_bonus ? ` · +${item.effect.attack_bonus} attack` : ""}`;
   if (item.effect.type === "heal") return `Heals ${item.effect.dice || "—"}`;
   return "No combat effect";
@@ -219,8 +234,13 @@ function itemComparison(item: Item, equipped: Item | null | undefined) {
   if (!item.slot) return "";
   if (!equipped) return `Empty ${item.slot} slot`;
   if (item.effect?.type === "ac") {
-    const delta = (item.effect.bonus || 0) - (equipped.effect?.bonus || 0);
-    return delta === 0 ? `Matches ${equipped.name}` : `${delta > 0 ? "+" : ""}${delta} Armor vs ${equipped.name}`;
+    const armorDelta = (item.effect.bonus || 0) - (equipped.effect?.bonus || 0);
+    const attackDelta = (item.effect.attack_bonus || 0) - (equipped.effect?.attack_bonus || 0);
+    if (!armorDelta && !attackDelta) return `Matches ${equipped.name}`;
+    const changes = [];
+    if (armorDelta) changes.push(`${armorDelta > 0 ? "+" : ""}${armorDelta} Armor`);
+    if (attackDelta) changes.push(`${attackDelta > 0 ? "+" : ""}${attackDelta} attack`);
+    return `${changes.join(" · ")} vs ${equipped.name}`;
   }
   return `Compare with ${equipped.name}`;
 }
@@ -258,6 +278,9 @@ export default function Home() {
   const [managedAdventurer, setManagedAdventurer] = useState<ManagedAdventurer | null>(null);
   const [attributeDraft, setAttributeDraft] = useState<Record<string, number>>({});
   const [upgradeDraft, setUpgradeDraft] = useState("");
+  const [shopOpen, setShopOpen] = useState(false);
+  const [shopTab, setShopTab] = useState<ShopTab>("weapons");
+  const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
 
   const apiBase = "http://127.0.0.1:8000";
 
@@ -437,6 +460,8 @@ export default function Home() {
       const payload = await response.json() as { adventurer?: ManagedAdventurer; error?: string };
       if (!response.ok || !payload.adventurer) throw new Error(payload.error || "Could not open that adventurer.");
       setManagedAdventurer(payload.adventurer);
+      setShopOpen(false);
+      setPendingPurchase(null);
       setAttributeDraft({});
       setUpgradeDraft("");
     } catch (requestError) {
@@ -529,6 +554,9 @@ export default function Home() {
     const raceProfile = catalog?.races.find((item) => item.name === setup.race);
     const companionProfile = campaign?.companions.find((item) => item.id === setup.companion_id);
     const managedPotionCount = managedAdventurer?.inventory.find((item) => item.id === "healing_potion")?.quantity || 0;
+    const visibleShopItems = managedAdventurer?.shop.items.filter((item) =>
+      shopTab === "weapons" ? item.kind === "weapon" : shopTab === "armor" ? item.kind === "armor" : false
+    ) || [];
     return (
       <main className="game-shell creation-screen">
         <section className="creation-card">
@@ -583,13 +611,14 @@ export default function Home() {
                 <div className="hub-equipment"><span className="section-label">Equipped</span>{Object.entries(managedAdventurer.equipment).map(([slot, item]) => <div key={slot}><span>{slot}</span>{item ? <><span className="item-copy"><b>{item.name}</b><small>{itemStats(item)}</small></span><button onClick={() => manageAdventurer("unequip", { target: slot })} disabled={busy}>Unequip</button></> : <em>Empty</em>}</div>)}</div>
                 <div className="hub-inventory"><span className="section-label">Pack</span>{managedAdventurer.inventory.map((item, index) => <div key={`${item.id}-${index}`}><span className="item-copy"><b>{item.name}</b><small>{item.kind}{item.quantity && item.quantity > 1 ? ` · ×${item.quantity}` : ""} · {itemStats(item)}</small>{item.slot && <em>{itemComparison(item, managedAdventurer.equipment[item.slot])}</em>}</span>{["armor", "weapon"].includes(item.kind) && <button onClick={() => manageAdventurer("equip", { item: item.name })} disabled={busy}>Equip</button>}{Boolean(item.sell_value) && <button onClick={() => manageAdventurer("sell", { item: item.name })} disabled={busy}>Sell · {item.sell_value}g</button>}<button onClick={() => manageAdventurer("drop", { item: item.name })} disabled={busy || item.kind === "quest"}>Drop{item.quantity && item.quantity > 1 ? " one" : ""}</button></div>)}</div>
               </div>
-              <section className="trading-post"><div><span className="section-label">Roadside provisioner</span><h3>Supplies and equipment</h3><p>Potions stack to {managedAdventurer.shop.stack_limit}. Equipment uses one pack slot and can be compared before purchase.</p></div><div className="shop-grid"><article><span className="item-copy"><b>Healing Potion · ×{managedPotionCount}/{managedAdventurer.shop.stack_limit}</b><small>Heals 1d6+2</small></span><button onClick={() => manageAdventurer("buy_potions", { quantity: 1 })} disabled={busy || managedPotionCount + 1 > managedAdventurer.shop.stack_limit || managedAdventurer.player.gold < managedAdventurer.shop.healing_potion_price}><b>Buy one</b><span>{managedAdventurer.shop.healing_potion_price} gold</span></button><button onClick={() => manageAdventurer("buy_potions", { quantity: managedAdventurer.shop.bundle_quantity })} disabled={busy || managedPotionCount + managedAdventurer.shop.bundle_quantity > managedAdventurer.shop.stack_limit || managedAdventurer.player.gold < managedAdventurer.shop.healing_potion_price * managedAdventurer.shop.bundle_quantity}><b>Buy ×{managedAdventurer.shop.bundle_quantity}</b><span>{managedAdventurer.shop.healing_potion_price * managedAdventurer.shop.bundle_quantity} gold</span></button></article>{managedAdventurer.shop.items.map((item) => <article key={item.id}><span className="item-copy"><b>{item.name}</b><small>{itemStats(item)} · Tier {item.tier}</small><em>{itemComparison(item, item.slot ? managedAdventurer.equipment[item.slot] : null)}</em></span><button onClick={() => manageAdventurer("buy_item", { item: item.id })} disabled={busy || managedAdventurer.player.gold < (item.buy_value || 0) || managedAdventurer.inventory_slots >= managedAdventurer.inventory_limit}><b>Buy</b><span>{item.buy_value} gold</span></button></article>)}</div></section>
+              <section className="provisioner-callout"><div><span className="section-label">Roadside provisioner</span><h3>Supplies, equipment, and trade</h3><p>Browse larger item details, compare equipped gear, or sell unwanted equipment.</p></div><button onClick={() => { setShopTab("weapons"); setShopOpen(true); }}>Open provisioner</button></section>
               <div className="hub-stats">{Object.entries(managedAdventurer.player.stats).map(([stat, value]) => <span key={stat}><small>{stat}</small><b>{value}</b></span>)}</div>
+              {shopOpen && <div className="shop-backdrop" role="presentation" onMouseDown={() => { setShopOpen(false); setPendingPurchase(null); }}><section className="shop-dialog" role="dialog" aria-modal="true" aria-label="Roadside provisioner" onMouseDown={(event) => event.stopPropagation()}><header><div><span className="eyebrow">Roadside provisioner</span><h2>Outfit the next expedition</h2></div><div className="shop-resources"><span><b>{managedAdventurer.player.gold}</b> gold</span><span><b>{managedAdventurer.inventory_slots}</b> / {managedAdventurer.inventory_limit} pack slots</span><button aria-label="Close provisioner" onClick={() => { setShopOpen(false); setPendingPurchase(null); }}>Close</button></div></header><nav className="shop-tabs" aria-label="Shop categories">{(["weapons", "armor", "consumables", "sell"] as ShopTab[]).map((tab) => <button key={tab} className={shopTab === tab ? "active" : ""} onClick={() => { setShopTab(tab); setPendingPurchase(null); }}>{tab}</button>)}</nav><div className="shop-content">{["weapons", "armor"].includes(shopTab) && <div className="shop-catalog">{visibleShopItems.map((item) => { const equipped = item.slot ? managedAdventurer.equipment[item.slot] : null; const price = item.buy_value || 0; return <article key={item.id}><div className="shop-item-heading"><span>{item.slot}</span><em>Tier {item.tier}</em></div><h3>{item.name}</h3><p>{item.description}</p><div className="shop-item-stats"><b>{itemStats(item)}</b><span>{itemComparison(item, equipped)}</span></div><div className="shop-equipped"><small>Currently equipped</small><b>{equipped?.name || `Empty ${item.slot} slot`}</b><span>{equipped ? itemStats(equipped) : "No bonuses"}</span></div><button className="shop-buy" onClick={() => setPendingPurchase({ label: item.name, price, command: "buy_item", options: { item: item.id } })} disabled={busy || managedAdventurer.player.gold < price || managedAdventurer.inventory_slots >= managedAdventurer.inventory_limit}><span>Purchase</span><b>{price} gold</b></button></article>; })}</div>}{shopTab === "consumables" && <div className="consumable-shop"><article><div><span className="section-label">Healing supply</span><h3>Healing Potion</h3><p>Restores 1d6+2 health to you or your companion. A stack occupies one pack slot.</p></div><div className="potion-stock"><span>Carried</span><b>{managedPotionCount} / {managedAdventurer.shop.stack_limit}</b></div><div className="potion-options"><button onClick={() => setPendingPurchase({ label: "one Healing Potion", price: managedAdventurer.shop.healing_potion_price, command: "buy_potions", options: { quantity: 1 } })} disabled={busy || managedPotionCount + 1 > managedAdventurer.shop.stack_limit || managedAdventurer.player.gold < managedAdventurer.shop.healing_potion_price}>Buy one · {managedAdventurer.shop.healing_potion_price} gold</button><button onClick={() => setPendingPurchase({ label: `${managedAdventurer.shop.bundle_quantity} Healing Potions`, price: managedAdventurer.shop.healing_potion_price * managedAdventurer.shop.bundle_quantity, command: "buy_potions", options: { quantity: managedAdventurer.shop.bundle_quantity } })} disabled={busy || managedPotionCount + managedAdventurer.shop.bundle_quantity > managedAdventurer.shop.stack_limit || managedAdventurer.player.gold < managedAdventurer.shop.healing_potion_price * managedAdventurer.shop.bundle_quantity}>Buy ×{managedAdventurer.shop.bundle_quantity} · {managedAdventurer.shop.healing_potion_price * managedAdventurer.shop.bundle_quantity} gold</button></div></article></div>}{shopTab === "sell" && <div className="sell-list">{managedAdventurer.inventory.filter((item) => Boolean(item.sell_value)).map((item, index) => <article key={`${item.id}-${index}`}><div><span>{item.slot || item.kind}</span><h3>{item.name}</h3><p>{itemStats(item)}{item.quantity && item.quantity > 1 ? ` · ${item.quantity} carried` : ""}</p></div><button onClick={() => manageAdventurer("sell", { item: item.name })} disabled={busy}>Sell one · {item.sell_value} gold</button></article>)}{!managedAdventurer.inventory.some((item) => Boolean(item.sell_value)) && <p className="shop-empty">You have no ordinary equipment to sell.</p>}</div>}</div>{pendingPurchase && <aside className="purchase-confirm" aria-live="polite"><div><span className="section-label">Confirm purchase</span><p>Buy <b>{pendingPurchase.label}</b> for <b>{pendingPurchase.price} gold</b>?</p></div><button onClick={() => setPendingPurchase(null)}>Cancel</button><button className="confirm-buy" disabled={busy} onClick={async () => { const purchase = pendingPurchase; setPendingPurchase(null); await manageAdventurer(purchase.command, purchase.options); }}>Confirm purchase</button></aside>}</section></div>}
             </section>
           )}
           <div className="creation-grid">
             <label className="field wide"><span>Name</span><input value={setup.name} disabled={Boolean(setup.adventurer_id)} maxLength={30} onChange={(event) => setSetup({ ...setup, name: event.target.value })} /></label>
-            <label className="field"><span>Campaign</span><select value={setup.campaign_id} onChange={(event) => setSetup({ ...setup, campaign_id: event.target.value, companion_id: catalog?.campaigns.find((item) => item.id === event.target.value)?.companions[0]?.id || "" })}>{catalog?.campaigns.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small>{campaign?.description}</small></label>
+            <label className="field"><span>Campaign</span><select value={setup.campaign_id} onChange={(event) => setSetup({ ...setup, campaign_id: event.target.value, companion_id: catalog?.campaigns.find((item) => item.id === event.target.value)?.companions[0]?.id || "" })}>{catalog?.campaigns.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small>{campaign?.description} {campaign ? `Recommended level ${campaign.recommended_level} · Equipment through tier ${campaign.max_item_tier}.` : ""}</small></label>
             <label className="field"><span>Class</span><select value={setup.player_class} disabled={Boolean(setup.adventurer_id)} onChange={(event) => setSetup({ ...setup, player_class: event.target.value })}>{catalog?.classes.map((item) => <option key={item.name}>{item.name}</option>)}</select><small>{classProfile?.description} {classProfile?.spells.length ? `Spells: ${classProfile.spells.join(", ")}.` : ""}</small></label>
             <label className="field"><span>Race</span><select value={setup.race} disabled={Boolean(setup.adventurer_id)} onChange={(event) => setSetup({ ...setup, race: event.target.value })}>{catalog?.races.map((item) => <option key={item.name}>{item.name}</option>)}</select><small>{raceProfile?.description}</small></label>
             <label className="field"><span>Sex</span><select value={setup.sex} disabled={Boolean(setup.adventurer_id)} onChange={(event) => setSetup({ ...setup, sex: event.target.value as "Male" | "Female" })}><option value="Female">Female</option><option value="Male">Male</option></select><small>Stored with this adventurer across campaigns.</small></label>

@@ -13,6 +13,7 @@ from .profiles import (
 )
 from .llm import LLMClient
 from .rules import (
+    award_campaign_completion,
     grant_xp,
     apply_companion_action,
     apply_enemy_action,
@@ -570,13 +571,8 @@ def main() -> None:
                 print(gm_text)
                 last_narrated_turn = state.turn
             if state.player.hp > 0:
-                campaign = get_campaign(state.campaign_id)
-                completion_xp = getattr(campaign, "completion_xp", 0)
-                if completion_xp > 0 and not state.flags.get("completion_xp_awarded"):
-                    level_msgs = grant_xp(state, completion_xp)
-                    for msg in level_msgs:
-                        print(color_text(msg, "green"))
-                    state.flags["completion_xp_awarded"] = True
+                for message in award_campaign_completion(state):
+                    print(color_text(message, "green"))
                 strip_campaign_quest_items(state)
                 sync_player_ac(state)
                 save_state(state, SAVE_PATH)

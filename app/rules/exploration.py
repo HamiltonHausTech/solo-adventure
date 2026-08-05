@@ -142,13 +142,32 @@ def _handle_combat_room_post_fight(
         item_texts: List[str] = []
         for entry in unlooted:
             enemy_name = str(entry.get("name", ""))
-            gold, item_id = roll_loot(state.campaign_id, enemy_name)
+            owned_item_ids = {
+                str(item.get("id", ""))
+                for item in state.inventory
+                if isinstance(item, dict)
+            }
+            owned_item_ids.update(
+                str(item.get("id", ""))
+                for item in state.equipment.values()
+                if isinstance(item, dict)
+            )
+            owned_item_ids.update(state.player.discovered_unique_items)
+            gold, item_id = roll_loot(
+                state.campaign_id,
+                enemy_name,
+                player_class=state.player.cls,
+                owned_item_ids=owned_item_ids,
+                repeat_run=state.player.campaign_completions.get(state.campaign_id, 0) > 0,
+            )
             total_gold += gold
             if item_id:
                 item = item_from_id(state.campaign_id, item_id)
                 added, message = add_item_to_inventory(state, item)
                 if added:
                     item_texts.append(f"You find {item.get('name', 'gear')}.")
+                    if bool(item.get("unique", False)) and item_id not in state.player.discovered_unique_items:
+                        state.player.discovered_unique_items.append(item_id)
                 else:
                     item_texts.append(
                         f"You spot {item.get('name', 'gear')}, but {message.lower()}"

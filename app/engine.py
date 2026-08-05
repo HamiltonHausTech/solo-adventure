@@ -13,6 +13,7 @@ from .rules import (
     apply_exploration_action,
     apply_player_action,
     apply_rest,
+    award_campaign_completion,
     clear_round_buffs,
     create_companion,
     create_player,
@@ -406,18 +407,7 @@ class HeadlessEngine:
         return messages
 
     def _award_completion_once(self, messages: List[str]) -> None:
-        if not self.state.game_over or self.state.player.hp <= 0:
-            return
-        if self.state.flags.get("completion_xp_awarded"):
-            return
-        from .rules import grant_xp
-
-        amount = get_campaign(self.state.campaign_id).completion_xp
-        if amount:
-            level_messages = grant_xp(self.state, amount)
-            messages.append(f"Campaign complete. XP +{amount}.")
-            messages.extend(level_messages)
-        self.state.flags["completion_xp_awarded"] = True
+        messages.extend(award_campaign_completion(self.state))
 
     def _phase(self) -> str:
         if self.state.game_over:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from ..content import get_mob_profile, item_from_id
+from ..content import get_campaign, get_mob_profile, item_from_id
 from ..state import GameState
 
 from .dice import roll_die, roll_dice
@@ -36,6 +36,30 @@ SHOP_ITEMS: Dict[str, Dict[str, object]] = {
         "slot": "chest", "tier": 1, "buy_value": 36, "sell_value": 18,
         "description": "A sturdy vest suited to long expeditions.",
         "effect": {"type": "ac", "bonus": 2},
+    },
+    "scout_gloves": {
+        "id": "scout_gloves", "name": "Scout Gloves", "kind": "armor",
+        "slot": "hands", "tier": 1, "buy_value": 22, "sell_value": 11,
+        "description": "Supple gloves that preserve a quick grip.",
+        "effect": {"type": "ac", "bonus": 0, "attack_bonus": 1},
+    },
+    "reinforced_gauntlets": {
+        "id": "reinforced_gauntlets", "name": "Reinforced Gauntlets", "kind": "armor",
+        "slot": "hands", "tier": 1, "buy_value": 24, "sell_value": 12,
+        "description": "Heavy protection at the cost of finesse.",
+        "effect": {"type": "ac", "bonus": 1, "attack_bonus": 0},
+    },
+    "trail_leggings": {
+        "id": "trail_leggings", "name": "Trail Leggings", "kind": "armor",
+        "slot": "legs", "tier": 1, "buy_value": 24, "sell_value": 12,
+        "description": "Layered road leathers offering reliable protection.",
+        "effect": {"type": "ac", "bonus": 1, "attack_bonus": 0},
+    },
+    "duelist_leggings": {
+        "id": "duelist_leggings", "name": "Duelist Leggings", "kind": "armor",
+        "slot": "legs", "tier": 1, "buy_value": 26, "sell_value": 13,
+        "description": "Flexible tailoring designed for aggressive footwork.",
+        "effect": {"type": "ac", "bonus": 0, "attack_bonus": 1},
     },
 }
 
@@ -110,7 +134,13 @@ def add_item_to_inventory(state: GameState, item: Dict[str, object]) -> Tuple[bo
     return True, f"Added {item.get('name', 'item')} to your pack."
 
 
-def roll_loot(campaign_id: str, enemy_name: str) -> Tuple[int, Optional[str]]:
+def roll_loot(
+    campaign_id: str,
+    enemy_name: str,
+    player_class: str = "",
+    owned_item_ids: Optional[set[str]] = None,
+    repeat_run: bool = False,
+) -> Tuple[int, Optional[str]]:
     if not enemy_name:
         return 0, None
     loot = get_mob_profile(campaign_id, enemy_name).loot or {}
@@ -118,10 +148,26 @@ def roll_loot(campaign_id: str, enemy_name: str) -> Tuple[int, Optional[str]]:
     gold_amount = 0
     if gold_expr:
         gold_amount, _ = roll_dice(str(gold_expr))
-    items = list(loot.get("items") or [])
+    campaign = get_campaign(campaign_id)
+    owned = owned_item_ids or set()
+    items = []
+    for item_id in list(loot.get("items") or []):
+        item = campaign.items.get(str(item_id), {})
+        if int(item.get("tier", 1)) > campaign.max_item_tier:
+            continue
+        if bool(item.get("unique", False)) and str(item_id) in owned:
+            continue
+        items.append(str(item_id))
+        affinities = {str(value) for value in item.get("class_affinity", [])}
+        if player_class and player_class in affinities:
+            items.extend([str(item_id), str(item_id)])
+    if repeat_run:
+        gold_amount = int(gold_amount * campaign.repeat_reward_multiplier)
     if not items:
         return gold_amount, None
     item_chance = int(loot.get("item_chance", 100))
+    if repeat_run:
+        item_chance = int(item_chance * campaign.repeat_reward_multiplier)
     item_chance = max(0, min(100, item_chance))
     if item_chance < 100 and roll_die(100) > item_chance:
         return gold_amount, None
@@ -353,10 +399,12 @@ def equip_item(state: GameState, query: str) -> Tuple[bool, str]:
 
 
 def equipment_attack_bonus(state: GameState) -> int:
-    weapon = state.equipment.get("weapon")
-    raw_effect = weapon.get("effect") if isinstance(weapon, dict) else None
-    effect = raw_effect if isinstance(raw_effect, dict) else {}
-    return int(effect.get("attack_bonus", 0)) if effect.get("type") == "weapon" else 0
+    bonus = 0
+    for item in state.equipment.values():
+        raw_effect = item.get("effect") if isinstance(item, dict) else None
+        effect = raw_effect if isinstance(raw_effect, dict) else {}
+        bonus += int(effect.get("attack_bonus", 0))
+    return bonus
 
 
 def equipped_damage(state: GameState) -> str:

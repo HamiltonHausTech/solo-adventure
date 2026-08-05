@@ -5,6 +5,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -160,6 +161,52 @@ class HeadlessEngineTests(unittest.TestCase):
         engine._award_completion_once(messages)
         self.assertEqual(engine.state.player.xp, first_xp)
         self.assertTrue(engine.state.flags["completion_xp_awarded"])
+
+    def test_repeat_campaign_completion_uses_reduced_reward(self) -> None:
+        first = HeadlessEngine.new()
+        first.state.game_over = True
+        first._award_completion_once([])
+        self.assertEqual(first.state.player.campaign_completions["ruined_watchtower"], 1)
+        self.assertEqual(first.state.player.xp, 100)
+
+        repeat = HeadlessEngine.from_adventurer(
+            first.state, campaign_id="ruined_watchtower", companion_id="mara"
+        )
+        repeat.state.game_over = True
+        messages = []
+        repeat._award_completion_once(messages)
+        self.assertEqual(repeat.state.player.campaign_completions["ruined_watchtower"], 2)
+        self.assertEqual(repeat.state.player.xp, 135)
+        self.assertTrue(any("Repeat clear" in message for message in messages))
+
+    def test_completion_xp_is_zero_ten_levels_above_recommendation(self) -> None:
+        engine = HeadlessEngine.new(campaign_id="ruined_watchtower")
+        engine.state.player.level = 11
+        engine.state.game_over = True
+        messages = []
+        engine._award_completion_once(messages)
+        self.assertEqual(engine.state.player.xp, 0)
+        self.assertEqual(engine.state.player.campaign_completions["ruined_watchtower"], 1)
+        self.assertTrue(engine.state.flags["completion_xp_awarded"])
+        self.assertTrue(any("XP +0" in message for message in messages))
+
+    def test_zero_base_completion_reward_has_accurate_message(self) -> None:
+        engine = HeadlessEngine.new()
+        engine.state.game_over = True
+        no_reward_campaign = replace(get_campaign("ruined_watchtower"), completion_xp=0)
+        messages = []
+        with patch("app.rules.rewards.get_campaign", return_value=no_reward_campaign):
+            engine._award_completion_once(messages)
+        self.assertTrue(any("no completion XP reward" in message for message in messages))
+        self.assertFalse(any("recommended level by 10" in message for message in messages))
+
+    def test_campaign_history_survives_save_restore(self) -> None:
+        engine = HeadlessEngine.new()
+        engine.state.player.campaign_completions["ruined_watchtower"] = 2
+        engine.state.player.discovered_unique_items.append("greyfen_mail")
+        restored = HeadlessEngine.restore(engine.state.to_dict())
+        self.assertEqual(restored.state.player.campaign_completions["ruined_watchtower"], 2)
+        self.assertIn("greyfen_mail", restored.state.player.discovered_unique_items)
 
     def test_companion_conversation_updates_relationship_once(self) -> None:
         engine = HeadlessEngine.new(companion_id="mara")
@@ -452,6 +499,9 @@ class GameAPITests(unittest.TestCase):
         self.assertTrue(catalog["campaigns"])
         self.assertTrue(catalog["classes"])
         self.assertTrue(catalog["races"])
+        watchtower = next(item for item in catalog["campaigns"] if item["id"] == "ruined_watchtower")
+        self.assertEqual(watchtower["recommended_level"], 1)
+        self.assertEqual(watchtower["max_item_tier"], 1)
         eldrin = next(
             companion
             for campaign in catalog["campaigns"]

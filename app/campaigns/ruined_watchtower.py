@@ -100,6 +100,20 @@ ITEM_CATALOG: Dict[str, Dict[str, object]] = {
         "effect": {"type": "ac", "bonus": 1},
         "counts_toward_limit": True,
     },
+    "cutpurse_gloves": {
+        "id": "cutpurse_gloves", "name": "Cutpurse Gloves", "kind": "armor",
+        "slot": "hands", "tier": 1, "sell_value": 9,
+        "description": "Close-fitting gloves that steady a quick strike.",
+        "effect": {"type": "ac", "bonus": 0, "attack_bonus": 1}, "class_affinity": ["Rogue"],
+        "counts_toward_limit": True,
+    },
+    "watch_leggings": {
+        "id": "watch_leggings", "name": "Watchman's Leggings", "kind": "armor",
+        "slot": "legs", "tier": 1, "sell_value": 8,
+        "description": "Weathered uniform leathers reinforced at the knee.",
+        "effect": {"type": "ac", "bonus": 1, "attack_bonus": 0}, "class_affinity": ["Fighter", "Cleric"],
+        "counts_toward_limit": True,
+    },
     "silver_locket": {
         "id": "silver_locket",
         "name": "Silver Locket of the Watch",
@@ -143,7 +157,7 @@ MOBS: Dict[str, MobProfile] = {
         ac=13,
         attack_bonus=3,
         damage="1d6",
-        loot={"gold": "1d6+2", "items": ["padded_arms", "worn_boots", "leather_cap"]},
+        loot={"gold": "1d6+2", "items": ["padded_arms", "worn_boots", "leather_cap", "cutpurse_gloves", "watch_leggings"]},
         ai="focus_player",
         xp=25,
     ),
@@ -172,6 +186,8 @@ RUINED_WATCHTOWER = Campaign(
     companions=COMPANIONS,
     default_companion_ids=["mara", "torvald"],
     completion_xp=100,
+    recommended_level=1,
+    max_item_tier=1,
     exits={
         "courtyard": {"down": "cellar", "cellar": "cellar", "up": "barracks", "barracks": "barracks"},
         "cellar": {"up": "courtyard", "courtyard": "courtyard"},
