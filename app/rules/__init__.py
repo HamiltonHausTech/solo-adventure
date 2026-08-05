@@ -46,6 +46,7 @@ from .player import (
 from .rest import apply_rest, regen_companion_mana, regen_mana, reset_rest_streak
 from .experience import grant_xp
 from .progression import apply_progression_choices, class_upgrade_options
+from .rewards import award_campaign_completion
 
 __all__ = [
     "add_item_to_inventory",
@@ -56,6 +57,7 @@ __all__ = [
     "apply_exploration_action",
     "apply_player_action",
     "apply_rest",
+    "award_campaign_completion",
     "can_add_item",
     "check",
     "create_campaign_companions",

@@ -5,6 +5,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -188,6 +189,16 @@ class HeadlessEngineTests(unittest.TestCase):
         self.assertEqual(engine.state.player.campaign_completions["ruined_watchtower"], 1)
         self.assertTrue(engine.state.flags["completion_xp_awarded"])
         self.assertTrue(any("XP +0" in message for message in messages))
+
+    def test_zero_base_completion_reward_has_accurate_message(self) -> None:
+        engine = HeadlessEngine.new()
+        engine.state.game_over = True
+        no_reward_campaign = replace(get_campaign("ruined_watchtower"), completion_xp=0)
+        messages = []
+        with patch("app.rules.rewards.get_campaign", return_value=no_reward_campaign):
+            engine._award_completion_once(messages)
+        self.assertTrue(any("no completion XP reward" in message for message in messages))
+        self.assertFalse(any("recommended level by 10" in message for message in messages))
 
     def test_campaign_history_survives_save_restore(self) -> None:
         engine = HeadlessEngine.new()

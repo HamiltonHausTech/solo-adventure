@@ -13,6 +13,7 @@ from .rules import (
     apply_exploration_action,
     apply_player_action,
     apply_rest,
+    award_campaign_completion,
     clear_round_buffs,
     create_companion,
     create_player,
@@ -406,33 +407,7 @@ class HeadlessEngine:
         return messages
 
     def _award_completion_once(self, messages: List[str]) -> None:
-        if not self.state.game_over or self.state.player.hp <= 0:
-            return
-        if self.state.flags.get("completion_xp_awarded"):
-            return
-        from .rules import grant_xp
-
-        campaign = get_campaign(self.state.campaign_id)
-        prior_completions = self.state.player.campaign_completions.get(self.state.campaign_id, 0)
-        amount = campaign.completion_xp
-        if prior_completions:
-            amount = int(amount * campaign.repeat_reward_multiplier)
-        if self.state.player.level >= campaign.recommended_level + 10:
-            amount = 0
-        elif prior_completions and self.state.player.level >= campaign.recommended_level + 2:
-            amount = int(amount * 0.5)
-        reward_label = "Repeat clear" if prior_completions else "First clear"
-        if amount:
-            level_messages = grant_xp(self.state, amount)
-            messages.append(f"Campaign complete · {reward_label}. XP +{amount}.")
-            messages.extend(level_messages)
-        else:
-            messages.append(
-                f"Campaign complete · {reward_label}. Completion XP +0 because your level "
-                "exceeds this campaign's recommended level by 10 or more."
-            )
-        self.state.player.campaign_completions[self.state.campaign_id] = prior_completions + 1
-        self.state.flags["completion_xp_awarded"] = True
+        messages.extend(award_campaign_completion(self.state))
 
     def _phase(self) -> str:
         if self.state.game_over:
