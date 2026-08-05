@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..content import get_mob_profile
+from ..content import get_campaign, get_mob_profile
 from ..state import Enemy, GameState
 
 from .dice import roll_die, roll_dice
@@ -376,6 +376,11 @@ def end_combat_if_needed(state: GameState) -> Optional[str]:
             getattr(get_mob_profile(state.campaign_id, e.name), "xp", 0)
             for e in state.enemies
         )
+        campaign = get_campaign(state.campaign_id)
+        if state.player.campaign_completions.get(state.campaign_id, 0) > 0:
+            total_xp = int(total_xp * campaign.repeat_reward_multiplier)
+        if state.player.level >= campaign.recommended_level + 2:
+            total_xp = int(total_xp * 0.5)
         level_messages = grant_xp(state, total_xp) if total_xp > 0 else []
         corpses = get_flag_dict(state, "corpses")
         entries = []

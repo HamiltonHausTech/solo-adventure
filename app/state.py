@@ -30,6 +30,8 @@ class Character:
     unspent_attribute_points: int = 0
     unspent_class_upgrades: int = 0
     chosen_upgrades: List[str] = field(default_factory=list)
+    campaign_completions: Dict[str, int] = field(default_factory=dict)
+    discovered_unique_items: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         return {
@@ -54,6 +56,8 @@ class Character:
             "unspent_attribute_points": self.unspent_attribute_points,
             "unspent_class_upgrades": self.unspent_class_upgrades,
             "chosen_upgrades": list(self.chosen_upgrades),
+            "campaign_completions": dict(self.campaign_completions),
+            "discovered_unique_items": list(self.discovered_unique_items),
         }
 
     @staticmethod
@@ -100,6 +104,11 @@ class Character:
                 int(data.get("unspent_class_upgrades", level - 1 if legacy_rewards else 0)),
             ),
             chosen_upgrades=list(data.get("chosen_upgrades", [])),
+            campaign_completions={
+                str(key): max(0, int(value))
+                for key, value in dict(data.get("campaign_completions", {})).items()
+            },
+            discovered_unique_items=[str(item) for item in data.get("discovered_unique_items", [])],
         )
 
 

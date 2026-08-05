@@ -573,9 +573,17 @@ def main() -> None:
                 campaign = get_campaign(state.campaign_id)
                 completion_xp = getattr(campaign, "completion_xp", 0)
                 if completion_xp > 0 and not state.flags.get("completion_xp_awarded"):
+                    prior_completions = state.player.campaign_completions.get(state.campaign_id, 0)
+                    if prior_completions:
+                        completion_xp = int(completion_xp * campaign.repeat_reward_multiplier)
+                    if state.player.level >= campaign.recommended_level + 10:
+                        completion_xp = 0
+                    elif prior_completions and state.player.level >= campaign.recommended_level + 2:
+                        completion_xp = int(completion_xp * 0.5)
                     level_msgs = grant_xp(state, completion_xp)
                     for msg in level_msgs:
                         print(color_text(msg, "green"))
+                    state.player.campaign_completions[state.campaign_id] = prior_completions + 1
                     state.flags["completion_xp_awarded"] = True
                 strip_campaign_quest_items(state)
                 sync_player_ac(state)

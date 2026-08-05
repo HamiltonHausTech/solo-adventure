@@ -318,6 +318,49 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(state.equipment["weapon"]["id"], "duelist_knife")
         self.assertEqual(equipped_damage(state), "1d6+1")
 
+    def test_shop_covers_hands_and_legs_with_distinct_tradeoffs(self) -> None:
+        from app.rules.inventory import shop_catalog
+
+        shop = shop_catalog()
+        hand_items = [item for item in shop if item.get("slot") == "hands"]
+        leg_items = [item for item in shop if item.get("slot") == "legs"]
+        self.assertGreaterEqual(len(hand_items), 2)
+        self.assertGreaterEqual(len(leg_items), 2)
+        self.assertEqual(
+            {item["effect"].get("attack_bonus", 0) for item in hand_items},
+            {0, 1},
+        )
+
+    def test_attack_bonus_armor_affects_player_attack(self) -> None:
+        state = self.make_state()
+        state.inventory = [item_from_id("ruined_watchtower", "cutpurse_gloves")]
+        equipped, _ = equip_item(state, "cutpurse gloves")
+        self.assertTrue(equipped)
+        state.enemies = [create_enemy("ruined_watchtower", "Watchtower Bandit")]
+        with patch("app.rules.combat.roll_die", return_value=10), patch(
+            "app.rules.dice.roll_die", return_value=4
+        ):
+            result = apply_player_action(state, "attack")
+        self.assertIn("roll 10 -> 14", result)
+
+    def test_campaign_loot_pools_include_hand_and_leg_slots(self) -> None:
+        from app.content import get_campaign
+
+        for campaign_id in ["ruined_watchtower", "lost_crypt", "embers_of_greyfen"]:
+            campaign = get_campaign(campaign_id)
+            dropped_ids = {
+                item_id
+                for mob in campaign.mobs.values()
+                for item_id in (mob.loot or {}).get("items", [])
+            }
+            dropped_slots = {
+                campaign.items[item_id].get("slot")
+                for item_id in dropped_ids
+                if item_id in campaign.items
+            }
+            self.assertIn("hands", dropped_slots)
+            self.assertIn("legs", dropped_slots)
+
     def test_drop_item_frees_inventory_space(self) -> None:
         state = self.make_state()
         armor = item_from_id("ruined_watchtower", "leather_cap")
@@ -344,6 +387,41 @@ class RulesTests(unittest.TestCase):
         ):
             gold, item_id = roll_loot("embers_of_greyfen", "Thornbound Dead")
         self.assertEqual(gold, 5)
+        self.assertIsNone(item_id)
+
+    def test_class_affinity_weights_matching_loot(self) -> None:
+        from app.rules.inventory import roll_loot
+
+        with patch("app.rules.inventory.roll_dice", return_value=(6, "6")), patch(
+            "app.rules.inventory.roll_die", return_value=6
+        ):
+            _, item_id = roll_loot(
+                "ruined_watchtower", "Watchtower Bandit", player_class="Rogue"
+            )
+        self.assertEqual(item_id, "cutpurse_gloves")
+
+    def test_repeat_run_reduces_gold_and_item_chance(self) -> None:
+        from app.rules.inventory import roll_loot
+
+        with patch("app.rules.inventory.roll_dice", return_value=(10, "10")), patch(
+            "app.rules.inventory.roll_die", return_value=100
+        ):
+            gold, item_id = roll_loot(
+                "ruined_watchtower", "Watchtower Bandit", repeat_run=True
+            )
+        self.assertEqual(gold, 3)
+        self.assertIsNone(item_id)
+
+    def test_owned_unique_item_is_removed_from_future_loot(self) -> None:
+        from app.rules.inventory import roll_loot
+
+        with patch("app.rules.inventory.roll_dice", return_value=(8, "8")):
+            gold, item_id = roll_loot(
+                "embers_of_greyfen",
+                "Captain Veyra",
+                owned_item_ids={"greyfen_mail"},
+            )
+        self.assertEqual(gold, 8)
         self.assertIsNone(item_id)
 
     def test_equipment_slots_initialized(self) -> None:

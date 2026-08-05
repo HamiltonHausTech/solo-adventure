@@ -173,7 +173,9 @@ ITEM_CATALOG: Dict[str, Dict[str, object]] = {
     "leather_cap": {"id": "leather_cap", "name": "Leather Cap", "kind": "armor", "slot": "head", "effect": {"type": "ac", "bonus": 1}, "counts_toward_limit": True},
     "worn_boots": {"id": "worn_boots", "name": "Worn Boots", "kind": "armor", "slot": "feet", "effect": {"type": "ac", "bonus": 1}, "counts_toward_limit": True},
     "briar_guard": {"id": "briar_guard", "name": "Briar Guard", "kind": "armor", "slot": "arms", "effect": {"type": "ac", "bonus": 1}, "counts_toward_limit": True},
-    "greyfen_mail": {"id": "greyfen_mail", "name": "Greyfen Mail", "kind": "armor", "slot": "chest", "effect": {"type": "ac", "bonus": 2}, "counts_toward_limit": True},
+    "greyfen_mail": {"id": "greyfen_mail", "name": "Greyfen Mail", "kind": "armor", "slot": "chest", "tier": 2, "unique": True, "class_affinity": ["Fighter", "Cleric"], "effect": {"type": "ac", "bonus": 2}, "counts_toward_limit": True},
+    "briar_gloves": {"id": "briar_gloves", "name": "Briar Gloves", "kind": "armor", "slot": "hands", "tier": 2, "sell_value": 14, "description": "Thorn-stitched gloves that reward a decisive grip.", "class_affinity": ["Rogue", "Wizard"], "effect": {"type": "ac", "bonus": 0, "attack_bonus": 1}, "counts_toward_limit": True},
+    "greyfen_greaves": {"id": "greyfen_greaves", "name": "Greyfen Greaves", "kind": "armor", "slot": "legs", "tier": 2, "sell_value": 16, "description": "Rain-darkened greaves built for the fen roads.", "effect": {"type": "ac", "bonus": 1, "attack_bonus": 0}, "counts_toward_limit": True},
     "ember_heart": {"id": "ember_heart", "name": "The Ember Heart", "kind": "quest", "effect": None, "counts_toward_limit": False},
 }
 
@@ -184,9 +186,9 @@ COMPANIONS: Dict[str, CompanionProfile] = {
 }
 
 MOBS: Dict[str, MobProfile] = {
-    "Blackbriar Outriders": MobProfile(name="Blackbriar Outriders", hp=7, count=3, ac=12, attack_bonus=2, damage="1d4+1", loot={"gold": "2d6", "items": ["briar_guard"], "item_chance": 25}, xp=35),
+    "Blackbriar Outriders": MobProfile(name="Blackbriar Outriders", hp=7, count=3, ac=12, attack_bonus=2, damage="1d4+1", loot={"gold": "2d6", "items": ["briar_guard", "briar_gloves"], "item_chance": 25}, xp=35),
     "Bog Hounds": MobProfile(name="Bog Hounds", hp=8, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "1d4"}, xp=35),
-    "Thornbound Dead": MobProfile(name="Thornbound Dead", hp=9, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "2d4", "items": ["greyfen_mail"], "item_chance": 30}, xp=45),
+    "Thornbound Dead": MobProfile(name="Thornbound Dead", hp=9, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "2d4", "items": ["greyfen_mail", "greyfen_greaves"], "item_chance": 30}, xp=45),
     "Gate Marauders": MobProfile(name="Gate Marauders", hp=11, count=2, ac=14, attack_bonus=3, damage="1d6+1", loot={"gold": "3d6", "items": ["briar_guard"], "item_chance": 30}, ai="focus_player", xp=55),
     "Captain Veyra": MobProfile(name="Captain Veyra", hp=22, ac=15, attack_bonus=4, damage="1d8+1", loot={"gold": "4d6", "items": ["greyfen_mail"]}, ai="focus_player", xp=100),
 }
@@ -205,6 +207,8 @@ EMBERS_OF_GREYFEN = Campaign(
     companions=COMPANIONS,
     default_companion_ids=["eldrin", "mara", "torvald"],
     completion_xp=250,
+    recommended_level=3,
+    max_item_tier=2,
     exits={
         "greyfen_road": {"crossroads": "crossroads", "forward": "crossroads"},
         "crossroads": {"high_road": "high_road", "marsh_path": "marsh_path"},

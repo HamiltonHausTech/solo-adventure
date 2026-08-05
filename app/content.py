@@ -34,6 +34,9 @@ class Campaign:
     companions: Dict[str, CompanionProfile] = field(default_factory=dict)
     default_companion_ids: Optional[List[str]] = None
     completion_xp: int = 0  # XP awarded on successful campaign completion
+    recommended_level: int = 1
+    max_item_tier: int = 1
+    repeat_reward_multiplier: float = 0.35
 
 
 CAMPAIGNS: Dict[str, Campaign] = {}

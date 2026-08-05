@@ -157,6 +157,20 @@ ITEM_CATALOG: Dict[str, Dict[str, object]] = {
         "effect": {"type": "ac", "bonus": 2},
         "counts_toward_limit": True,
     },
+    "crypt_gauntlets": {
+        "id": "crypt_gauntlets", "name": "Crypt Gauntlets", "kind": "armor",
+        "slot": "hands", "tier": 2, "sell_value": 14,
+        "description": "Old plate gloves still sound beneath the tarnish.",
+        "effect": {"type": "ac", "bonus": 1, "attack_bonus": 0}, "class_affinity": ["Fighter", "Cleric"],
+        "counts_toward_limit": True,
+    },
+    "gravewrap_leggings": {
+        "id": "gravewrap_leggings", "name": "Gravewrap Leggings", "kind": "armor",
+        "slot": "legs", "tier": 2, "sell_value": 15,
+        "description": "Enchanted wrappings that lend unnatural speed.",
+        "effect": {"type": "ac", "bonus": 0, "attack_bonus": 1}, "class_affinity": ["Rogue", "Wizard"],
+        "counts_toward_limit": True,
+    },
     "amulet_of_rest": {
         "id": "amulet_of_rest",
         "name": "Amulet of Rest",
@@ -215,7 +229,7 @@ MOBS: Dict[str, MobProfile] = {
         ac=14,
         attack_bonus=2,
         damage="1d6",
-        loot={"gold": "2d4", "items": ["chain_shirt"]},
+        loot={"gold": "2d4", "items": ["chain_shirt", "crypt_gauntlets", "gravewrap_leggings"]},
         ai="focus_weakest",
         xp=30,
     ),
@@ -255,6 +269,8 @@ LOST_CRYPT = Campaign(
     companions=COMPANIONS,
     default_companion_ids=["eldrin", "mara", "torvald"],
     completion_xp=150,
+    recommended_level=2,
+    max_item_tier=2,
     exits={
         "approach": {"gate": "gate", "down": "gate"},
         "gate": {"approach": "approach", "hallway": "hallway", "down": "hallway"},
