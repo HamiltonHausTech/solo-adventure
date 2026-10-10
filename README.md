@@ -107,10 +107,32 @@ Supported endpoints:
 Game sessions are stored in SQLite and survive service restarts. The browser
 keeps only the opaque `game_id`; authoritative state remains in the database.
 
+### Character ownership and stale saves
+
+Each saved adventurer has an optimistic revision. A successful adventure command,
+hub edit, or newly started adventure advances it. Older adventure snapshots stay
+readable, but cannot overwrite the newer character: commands return HTTP `409`
+with code `stale_adventurer`. Reload the hub and start from the current adventurer
+to continue with the latest gear/progression. Existing adventure history is not
+rewritten. Concurrent stale writes are rejected inside the SQLite transaction,
+including across server processes. Legacy saves may continue only when their
+unversioned snapshot matches the current profile. Back up an existing database
+before upgrading; the revision column is added automatically on first startup.
+
+### Local-only service
+
+The API defaults to loopback and accepts browser origins only from localhost or
+loopback addresses. It has no user authentication and must not be exposed as a
+public service. Browser configuration and browser regression tests are documented
+in `web/README.md`. Changing the API URL does not add authentication or remote
+origin support. Live AI narration is currently a CLI feature, not a web feature.
+
 ## Tests
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+Frontend checks (from `web/`): `npm test`, `npm run typecheck`, and `npm run lint`.
 
 ## Save / Resume
 The game auto-saves every turn to `game_state.json` in the project root. If a save is found, you will be prompted to resume.
@@ -126,9 +148,9 @@ Characters are saved to the `characters/` directory and can be reused across cam
 - Stats: STR, DEX, CON, INT, WIS, CHA (AD&D-style). Allocate 12 points (0–4 per stat). CON adds to max HP.
 - XP and leveling: Earn XP from defeating enemies and completing campaigns. Level up for more HP, attack bonus, and (casters) mana. Spell choices (Wizard at levels 2, 4, 6…) are deferred until your next rest.
  - Combat is lightweight and turn-based; Mara acts after you.
-- Wizards use mana for Spark (cost 2, damage 1d4) and can learn Magic Missile, Shield, Sleep at level-up. Mana scales with INT, regen 1 per round.
+- Wizards use mana for Spark (cost 2, damage 1d4) and can learn Magic Missile, Shield, Sleep at level-up. Mana scales with INT; it does not regenerate during combat.
 - You start with 3 Healing Potions (each heals 1d6+2 to you or your companion).
-- Each completed turn is appended to a short `turn_log` in the save file for quick replay.
+- Each completed turn is appended to `turn_log` in the save file for quick replay.
 - Inventory has a slot limit (default 10) and armor slots (head, arms, hands, chest, legs, feet).
 - Looting enemies is manual (`loot` after a fight) and grants gold plus a possible armor piece.
 - Resting regenerates 1 mana and grants +1 HP every 2 consecutive rests (only out of combat).

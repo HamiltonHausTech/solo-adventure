@@ -10,12 +10,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock, RLock
 from typing import Any, Dict
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from .content import list_campaigns
 from .engine import HeadlessEngine
 from .profiles import CLASS_PROFILES, RACE_PROFILES, get_companion_archetype
 from .rules import apply_progression_choices, buy_healing_potions, buy_shop_item, drop_item, equip_item, sell_item, unequip_item
-from .storage import GameStore
+from .storage import GameStore, StaleAdventurerError
 
 
 SESSIONS: Dict[str, HeadlessEngine] = {}
@@ -30,20 +31,18 @@ def _resource_lock(resource_id: str) -> RLock:
 
 
 def _load_session(game_id: str) -> HeadlessEngine | None:
-    engine = SESSIONS.get(game_id)
-    if engine is not None:
-        return engine
+    # SQLite is authoritative: a cached mutable engine can retain rejected writes
+    # or miss updates committed through another server/store instance.
     if STORE is not None:
-        engine = STORE.load(game_id)
-        if engine is not None:
-            SESSIONS[game_id] = engine
-    return engine
+        return STORE.load(game_id)
+    return SESSIONS.get(game_id)
 
 
 def _save_session(game_id: str, engine: HeadlessEngine) -> None:
-    SESSIONS[game_id] = engine
     if STORE is not None:
         STORE.save(game_id, engine)
+    else:
+        SESSIONS[game_id] = engine
 
 
 class GameAPIHandler(BaseHTTPRequestHandler):
@@ -54,7 +53,10 @@ class GameAPIHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        if origin and self._origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
@@ -62,17 +64,50 @@ class GameAPIHandler(BaseHTTPRequestHandler):
 
     def _body(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0:
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Transfer-Encoding is not supported.")
+        if length < 0 or length > 65536:
+            raise ValueError("Request body must be at most 65536 bytes.")
+        if length == 0:
             return {}
         data = json.loads(self.rfile.read(length).decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("JSON body must be an object.")
         return data
 
+    @staticmethod
+    def _origin_allowed(origin: str) -> bool:
+        try:
+            parsed = urlsplit(origin)
+        except ValueError:
+            return False
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.path
+            and not parsed.query
+            and not parsed.fragment
+        )
+
+    def _check_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        try:
+            allowed = not origin or self._origin_allowed(origin)
+        except ValueError:
+            allowed = False
+        if not allowed:
+            self._send(HTTPStatus.FORBIDDEN, {"error": "Only local browser origins are allowed."})
+        return allowed
+
     def do_OPTIONS(self) -> None:  # noqa: N802
-        self._send(HTTPStatus.NO_CONTENT, {})
+        if self._check_origin():
+            self._send(HTTPStatus.NO_CONTENT, {})
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._check_origin():
+            return
         if self.path == "/api/health":
             self._send(
                 HTTPStatus.OK,
@@ -161,8 +196,23 @@ class GameAPIHandler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.NOT_FOUND, {"error": "Route not found."})
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._check_origin():
+            return
+        try:
+            self._post()
+        except StaleAdventurerError as error:
+            self._send(HTTPStatus.CONFLICT, {"error": str(error), "code": "stale_adventurer"})
+
+    def _post(self) -> None:
         try:
             payload = self._body()
+            for key in ("command", "target", "spell", "item", "name", "class", "race", "sex", "campaign_id", "adventurer_id", "adventurer_game_id", "companion_id", "upgrade"):
+                if key in payload and not isinstance(payload[key], str):
+                    if key in {"target", "spell", "item", "companion_id"} and payload[key] is None:
+                        continue
+                    raise ValueError(f"{key} must be a string.")
+            if "stats" in payload and payload["stats"] is not None and not isinstance(payload["stats"], dict):
+                raise ValueError("Stats must be an object.")
         except (json.JSONDecodeError, ValueError) as error:
             self._send(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -284,7 +334,7 @@ class GameAPIHandler(BaseHTTPRequestHandler):
                 if result.accepted:
                     _save_session(session_id, engine)
             status = HTTPStatus.OK if result.accepted else HTTPStatus.UNPROCESSABLE_ENTITY
-            self._send(status, {"game_id": session_id, **result.to_dict()})
+            self._send(status, {"game_id": session_id, **result.to_dict(), "state": engine.snapshot()})
             return
 
         self._send(HTTPStatus.NOT_FOUND, {"error": "Route not found."})

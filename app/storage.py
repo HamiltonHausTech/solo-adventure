@@ -13,6 +13,17 @@ from uuid import uuid4
 from .engine import HeadlessEngine
 
 
+class StaleAdventurerError(ValueError):
+    """A session/profile was derived from an older character revision."""
+
+    def __init__(self):
+        super().__init__(
+            "This adventurer changed in the hub or another adventure. "
+            "Your newer progress is safe. Reload the adventurer hub and start "
+            "a new adventure from the current character; this older save is read-only."
+        )
+
+
 class GameStore:
     def __init__(self, path: str):
         self.path = path
@@ -61,6 +72,9 @@ class GameStore:
                     "CREATE INDEX IF NOT EXISTS idx_adventurers_updated "
                     "ON adventurers(updated_at DESC)"
                 )
+                columns = {row["name"] for row in connection.execute("PRAGMA table_info(adventurers)")}
+                if "revision" not in columns:
+                    connection.execute("ALTER TABLE adventurers ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
                 self._backfill_adventurers(connection)
                 connection.execute("PRAGMA optimize")
 
@@ -126,9 +140,12 @@ class GameStore:
         now = datetime.now(timezone.utc).isoformat()
         with closing(self._connect()) as connection:
             with connection:
+                connection.execute("BEGIN IMMEDIATE")
                 if not engine.state.adventurer_id:
                     engine.state.adventurer_id = str(uuid4())
+                revision = self._next_revision(connection, engine)
                 state = engine.state.to_dict()
+                state["adventurer_revision"] = revision
                 identity = self._identity_key(state)
                 serialized = json.dumps(state, separators=(",", ":"))
                 connection.execute(
@@ -155,13 +172,14 @@ class GameStore:
                     """
                     INSERT INTO adventurers (
                         adventurer_id, identity_key, character_name, profile_json,
-                        source_game_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        source_game_id, created_at, updated_at, revision
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(adventurer_id) DO UPDATE SET
                         character_name = excluded.character_name,
                         profile_json = excluded.profile_json,
                         source_game_id = excluded.source_game_id,
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        revision = excluded.revision
                     """,
                     (
                         engine.state.adventurer_id,
@@ -171,36 +189,62 @@ class GameStore:
                         game_id,
                         now,
                         now,
+                        revision,
                     ),
                 )
+        engine.state.adventurer_revision = revision
 
     def load_adventurer(self, adventurer_id: str) -> Optional[HeadlessEngine]:
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT profile_json FROM adventurers WHERE adventurer_id = ?",
+                "SELECT profile_json, revision FROM adventurers WHERE adventurer_id = ?",
                 (adventurer_id,),
             ).fetchone()
         if row is None:
             return None
-        return HeadlessEngine.restore(json.loads(str(row["profile_json"])))
+        payload = json.loads(str(row["profile_json"]))
+        payload["adventurer_revision"] = row["revision"]
+        return HeadlessEngine.restore(payload)
+
+    @staticmethod
+    def _next_revision(connection: sqlite3.Connection, engine: HeadlessEngine) -> int:
+        """Check-and-increment while holding the SQLite write transaction."""
+        row = connection.execute(
+            "SELECT revision FROM adventurers WHERE adventurer_id = ?",
+            (engine.state.adventurer_id,),
+        ).fetchone()
+        expected = engine.state.adventurer_revision
+        if row is None:
+            if expected is not None:
+                raise StaleAdventurerError()
+            return 1
+        if expected != row["revision"]:
+            raise StaleAdventurerError()
+        return row["revision"] + 1
 
     def save_adventurer(self, engine: HeadlessEngine) -> None:
         if not engine.state.adventurer_id:
             raise ValueError("Adventurer ID is required.")
         now = datetime.now(timezone.utc).isoformat()
-        state = engine.state.to_dict()
-        serialized = json.dumps(state, separators=(",", ":"))
-        identity = self._identity_key(state)
         with closing(self._connect()) as connection:
             with connection:
-                connection.execute(
+                connection.execute("BEGIN IMMEDIATE")
+                revision = self._next_revision(connection, engine)
+                state = engine.state.to_dict()
+                state["adventurer_revision"] = revision
+                serialized = json.dumps(state, separators=(",", ":"))
+                identity = self._identity_key(state)
+                cursor = connection.execute(
                     """
                     UPDATE adventurers SET identity_key = ?, character_name = ?,
-                        profile_json = ?, updated_at = ?
+                        profile_json = ?, updated_at = ?, revision = ?
                     WHERE adventurer_id = ?
                     """,
-                    (identity, engine.state.player.name, serialized, now, engine.state.adventurer_id),
+                    (identity, engine.state.player.name, serialized, now, revision, engine.state.adventurer_id),
                 )
+                if cursor.rowcount != 1:
+                    raise StaleAdventurerError()
+        engine.state.adventurer_revision = revision
 
     def load(self, game_id: str) -> Optional[HeadlessEngine]:
         with closing(self._connect()) as connection:
@@ -211,6 +255,19 @@ class GameStore:
         if row is None:
             return None
         payload = json.loads(str(row["state_json"]))
+        if payload.get("adventurer_revision") is None:
+            # Legacy saves have no revision. Only a snapshot identical to the
+            # current profile may continue; do not guess that old progress wins.
+            with closing(self._connect()) as connection:
+                current = connection.execute(
+                    "SELECT profile_json, revision FROM adventurers WHERE adventurer_id = ?",
+                    (payload.get("adventurer_id"),),
+                ).fetchone()
+            profile = json.loads(current["profile_json"]) if current else {}
+            profile.pop("adventurer_revision", None)
+            comparable = dict(payload)
+            comparable.pop("adventurer_revision", None)
+            payload["adventurer_revision"] = current["revision"] if current and comparable == profile else -1
         return HeadlessEngine.restore(payload)
 
     def list_sessions(self, limit: int = 20) -> list[Dict[str, Any]]:
