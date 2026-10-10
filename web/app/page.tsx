@@ -1,6 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { API_BASE as apiBase, apiFetch } from "./api";
+import { useDialogFocus } from "./use-dialog-focus";
+import { ConnectionScreen } from "./connection-screen";
 
 type EngineEvent = {
   event_id: string;
@@ -118,6 +121,8 @@ type Catalog = {
     id: string;
     name: string;
     description: string;
+    recommended_level: number;
+    max_item_tier: number;
     companions: Array<{
       id: string;
       name: string;
@@ -303,6 +308,8 @@ export default function Home() {
   const [setup, setSetup] = useState<Setup>(DEFAULT_SETUP);
   const [savedAdventurers, setSavedAdventurers] = useState<SavedAdventurer[]>([]);
   const [savedAdventures, setSavedAdventures] = useState<SavedAdventure[]>([]);
+  const [rosterAttempt, setRosterAttempt] = useState(0);
+  const [rosterErrors, setRosterErrors] = useState<Partial<Record<"adventurers" | "games", string>>>({});
   const [managedAdventurer, setManagedAdventurer] = useState<ManagedAdventurer | null>(null);
   const [attributeDraft, setAttributeDraft] = useState<Record<string, number>>({});
   const [upgradeDraft, setUpgradeDraft] = useState("");
@@ -311,7 +318,22 @@ export default function Home() {
   const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
   const [spellbookOpen, setSpellbookOpen] = useState(false);
 
-  const apiBase = "http://127.0.0.1:8000";
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [selecting, setSelecting] = useState(false);
+  const selectionVersion = useRef(0);
+  const mutationPending = useRef(false);
+  const audioContext = useRef<AudioContext | null>(null);
+  useEffect(() => () => {
+    selectionVersion.current++;
+    void audioContext.current?.close();
+    window.speechSynthesis?.cancel();
+  }, []);
+  useDialogFocus(shopOpen || spellbookOpen || Boolean(game && showSetup), () => {
+    setShopOpen(false);
+    setPendingPurchase(null);
+    setSpellbookOpen(false);
+    if (game) setShowSetup(false);
+  });
 
   const playFeedback = useCallback((newEvents: EngineEvent[]) => {
     if (!newEvents.length) return;
@@ -326,7 +348,9 @@ export default function Home() {
     if (sound) {
       const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextClass) return;
-      const ctx = new AudioContextClass();
+      const ctx = audioContext.current ?? new AudioContextClass();
+      audioContext.current = ctx;
+      void ctx.resume();
       const oscillator = ctx.createOscillator();
       const gain = ctx.createGain();
       oscillator.type = latest.type.includes("damage") ? "sawtooth" : "sine";
@@ -334,19 +358,24 @@ export default function Home() {
       gain.gain.setValueAtTime(0.055, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
       oscillator.connect(gain).connect(ctx.destination);
+      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
       oscillator.start();
       oscillator.stop(ctx.currentTime + 0.18);
     }
   }, [sound, voice]);
 
   const startGame = useCallback(async (creation: Setup = DEFAULT_SETUP) => {
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    selectionVersion.current++;
+    setSelecting(false);
     const safeCreation = creation && typeof creation.name === "string"
       ? creation
       : DEFAULT_SETUP;
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/games`, {
+      const response = await apiFetch(`/api/games`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -379,77 +408,64 @@ export default function Home() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "The game engine is unavailable.");
     } finally {
+      mutationPending.current = false;
       setBusy(false);
     }
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     async function connect() {
+      setBusy(true);
       try {
-        const response = await fetch(`${apiBase}/api/catalog`);
-        if (response.ok && !cancelled) setCatalog(await response.json() as Catalog);
-      } catch {
-        // The connection error below provides the actionable state.
-      }
-      try {
-        const response = await fetch(`${apiBase}/api/adventurers`);
-        if (response.ok && !cancelled) {
-          const payload = await response.json() as { adventurers: SavedAdventurer[] };
-          setSavedAdventurers(payload.adventurers || []);
+        const response = await apiFetch("/api/catalog");
+        const payload = await response.json() as Catalog;
+        if (!payload.campaigns?.length || !payload.classes?.length || !payload.races?.length) {
+          throw new Error("Game engine catalog is incomplete. Retry the connection.");
         }
-      } catch {
-        // The setup page remains usable once the API reconnects.
-      }
-      try {
-        const response = await fetch(`${apiBase}/api/games`);
-        if (response.ok && !cancelled) {
-          const payload = await response.json() as { games: SavedAdventure[] };
-          setSavedAdventures(payload.games || []);
-        }
-      } catch {
-        // Character creation remains available if session history fails.
-      }
-      if (!cancelled) {
-        setBusy(false);
-        setShowSetup(true);
+        if (!cancelled) { setCatalog(payload); setShowSetup(true); setError(null); }
+      } catch (requestError) {
+        if (!cancelled) setError(requestError instanceof Error ? requestError.message : "The game engine is unavailable.");
+      } finally {
+        if (!cancelled) setBusy(false);
       }
     }
-    connect();
+    void connect();
     return () => { cancelled = true; };
-  }, [apiBase, startGame]);
+  }, [connectionAttempt]);
 
   useEffect(() => {
-    if (!showSetup) return;
+    if (!showSetup || busy) return;
     let cancelled = false;
-    async function refreshSavedCharacters() {
+    async function refreshList(list: "adventurers" | "games") {
       try {
-        const [adventurersResponse, gamesResponse] = await Promise.all([
-          fetch(`${apiBase}/api/adventurers`),
-          fetch(`${apiBase}/api/games`),
-        ]);
+        const response = await apiFetch(`/api/${list}`);
+        const payload = await response.json() as { adventurers?: SavedAdventurer[]; games?: SavedAdventure[] };
+        // Check after JSON parsing too: a retry/exit/mutation invalidates this request.
         if (cancelled) return;
-        if (adventurersResponse.ok) {
-          const payload = await adventurersResponse.json() as { adventurers: SavedAdventurer[] };
-          setSavedAdventurers(payload.adventurers || []);
-        }
-        if (gamesResponse.ok) {
-          const payload = await gamesResponse.json() as { games: SavedAdventure[] };
-          setSavedAdventures(payload.games || []);
-        }
-      } catch {
-        // Keep the current roster visible while the local API reconnects.
+        if (list === "adventurers") setSavedAdventurers(payload.adventurers || []);
+        else setSavedAdventures(payload.games || []);
+        setRosterErrors((current) => ({ ...current, [list]: undefined }));
+      } catch (requestError) {
+        if (cancelled) return;
+        // Preserve both previously loaded lists while exposing the failed one.
+        setRosterErrors((current) => ({ ...current, [list]: requestError instanceof Error ? requestError.message : "The game engine is unavailable." }));
       }
     }
-    refreshSavedCharacters();
+    void refreshList("adventurers");
+    void refreshList("games");
     return () => { cancelled = true; };
-  }, [apiBase, showSetup]);
+  }, [showSetup, busy, rosterAttempt]);
 
   async function resumeAdventure(saved: SavedAdventure) {
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    selectionVersion.current++;
+    setSelecting(false);
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/games/${saved.game_id}`);
+      const response = await apiFetch(`/api/games/${saved.game_id}`);
       const payload = await response.json() as ApiResponse;
       if (!response.ok) throw new Error(payload.error || "That adventure could not be restored.");
       setGameId(saved.game_id);
@@ -468,11 +484,20 @@ export default function Home() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "That adventure could not be restored.");
     } finally {
+      mutationPending.current = false;
       setBusy(false);
     }
   }
 
   async function chooseAdventurer(saved: SavedAdventurer) {
+    if (mutationPending.current) return;
+    const version = ++selectionVersion.current;
+    setSelecting(true);
+    setManagedAdventurer(null);
+    setShopOpen(false);
+    setPendingPurchase(null);
+    setAttributeDraft({});
+    setUpgradeDraft("");
     setSetup((current) => ({
       ...current,
       name: saved.name,
@@ -485,8 +510,9 @@ export default function Home() {
     }));
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/adventurers/${saved.adventurer_id}`);
+      const response = await apiFetch(`/api/adventurers/${saved.adventurer_id}`);
       const payload = await response.json() as { adventurer?: ManagedAdventurer; error?: string };
+      if (version !== selectionVersion.current) return;
       if (!response.ok || !payload.adventurer) throw new Error(payload.error || "Could not open that adventurer.");
       setManagedAdventurer(payload.adventurer);
       setShopOpen(false);
@@ -494,16 +520,19 @@ export default function Home() {
       setAttributeDraft({});
       setUpgradeDraft("");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not open that adventurer.");
+      if (version === selectionVersion.current) setError(requestError instanceof Error ? requestError.message : "Could not open that adventurer.");
+    } finally {
+      if (version === selectionVersion.current) setSelecting(false);
     }
   }
 
   async function manageAdventurer(commandName: "equip" | "unequip" | "drop" | "apply_progression" | "buy_potions" | "buy_item" | "sell", options: { item?: string; target?: string; allocations?: Record<string, number>; upgrade?: string; quantity?: number }) {
-    if (!managedAdventurer) return;
+    if (!managedAdventurer || selecting || busy || mutationPending.current) return;
+    mutationPending.current = true;
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/adventurers/${managedAdventurer.adventurer_id}/commands`, {
+      const response = await apiFetch(`/api/adventurers/${managedAdventurer.adventurer_id}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: commandName, ...options }),
@@ -517,6 +546,10 @@ export default function Home() {
       }
       setSavedAdventurers((current) => current.map((entry) => entry.adventurer_id === payload.adventurer?.adventurer_id ? {
         ...entry,
+        gold: payload.adventurer.player.gold,
+        level: payload.adventurer.player.level ?? entry.level,
+        xp: payload.adventurer.player.xp ?? entry.xp,
+        stats: payload.adventurer.player.stats,
         inventory_count: payload.adventurer.inventory.reduce((sum, item) => sum + (item.quantity || 1), 0),
         inventory_slots: payload.adventurer.inventory_slots,
         equipment_count: Object.values(payload.adventurer.equipment).filter(Boolean).length,
@@ -524,8 +557,25 @@ export default function Home() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not update that adventurer.");
     } finally {
+      mutationPending.current = false;
       setBusy(false);
     }
+  }
+
+  function returnToRoster() {
+    if (mutationPending.current) return;
+    selectionVersion.current++;
+    setSelecting(false);
+    setManagedAdventurer(null);
+    setSetup(DEFAULT_SETUP);
+    setAttributeDraft({});
+    setUpgradeDraft("");
+    setShopOpen(false);
+    setPendingPurchase(null);
+    setSpellbookOpen(false);
+    setGame(null);
+    setShowSetup(true);
+    setError(null);
   }
 
   function adjustStat(stat: string, delta: number) {
@@ -541,11 +591,12 @@ export default function Home() {
     commandName: string,
     options: { target?: string; spell?: string; item?: string } = {},
   ) {
-    if (!gameId || busy) return;
+    if (!gameId || busy || mutationPending.current) return;
+    mutationPending.current = true;
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/games/${gameId}/commands`, {
+      const response = await apiFetch(`/api/games/${gameId}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: commandName, ...options }),
@@ -559,21 +610,16 @@ export default function Home() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "The game engine is unavailable.");
     } finally {
+      mutationPending.current = false;
       setBusy(false);
     }
   }
 
   if (!game && !showSetup) {
-    return (
-      <main className="game-shell loading-screen">
-        <div className="loading-card">
-          <span className="brand-mark">SA</span>
-          <h1>{error ? "The engine is quiet" : "Waking the watchtower…"}</h1>
-          <p>{error || `Waiting for the authoritative game engine at ${apiBase}.`}</p>
-          {error && <button className="new-button" onClick={() => startGame()}>Try again</button>}
-        </div>
-      </main>
-    );
+    return <ConnectionScreen error={error} apiBase={apiBase} onRetry={() => {
+      setError(null);
+      setConnectionAttempt((value) => value + 1);
+    }} />;
   }
 
   if (!game && showSetup) {
@@ -590,7 +636,12 @@ export default function Home() {
       <main className="game-shell creation-screen">
         <section className="creation-card">
           <div className="creation-heading"><span className="eyebrow">Solo Adventure</span><h1>Choose your adventurer</h1><p>Continue a persistent story or begin another campaign.</p></div>
-          {error && <div className="creation-error">{error}</div>}
+          {error && <div className="creation-error" role="alert">{error}</div>}
+          {(rosterErrors.games || rosterErrors.adventurers) && <div className="creation-error" role="alert">
+            {rosterErrors.games && <p>Could not refresh saved adventures: {rosterErrors.games}</p>}
+            {rosterErrors.adventurers && <p>Could not refresh saved adventurers: {rosterErrors.adventurers}</p>}
+            <button type="button" disabled={busy} onClick={() => setRosterAttempt((attempt) => attempt + 1)}>Retry saved lists</button>
+          </div>}
           {savedAdventures.length > 0 && (
             <section className="saved-roster saved-adventures">
               <div className="roster-heading"><span className="section-label">Continue an adventure</span><small>Resume the exact campaign state</small></div>
@@ -623,16 +674,17 @@ export default function Home() {
             </section>
           )}
           <div className="new-adventurer-divider"><span>Or create a new adventurer</span></div>
-          {setup.adventurer_id && <button className="clear-saved-character" onClick={() => { setSetup(DEFAULT_SETUP); setManagedAdventurer(null); }}>Using {setup.name}. Manage equipment below or choose a campaign. <b>Create new instead</b></button>}
+          {setup.adventurer_id && <button className="clear-saved-character" disabled={busy} onClick={() => { selectionVersion.current++; setSelecting(false); setSetup(DEFAULT_SETUP); setManagedAdventurer(null); setShopOpen(false); setPendingPurchase(null); setError(null); }}>Using {setup.name}. Manage equipment below or choose a campaign. <b>Create new instead</b></button>}
+          {selecting && <p role="status">Loading adventurer…</p>}
           {managedAdventurer && (
             <section className="adventurer-hub" aria-label={`${managedAdventurer.player.name} character management`}>
               <div className="hub-heading"><div><span className="eyebrow">Between adventures</span><h2>{managedAdventurer.player.name}</h2><p>{managedAdventurer.player.sex && managedAdventurer.player.sex !== "Unspecified" ? `${managedAdventurer.player.sex} · ` : ""}{managedAdventurer.player.race} {managedAdventurer.player.cls} · Level {managedAdventurer.player.level} · {managedAdventurer.player.xp || 0} XP</p></div><div><b>{managedAdventurer.player.gold} gold</b><span>{managedAdventurer.inventory_slots}/{managedAdventurer.inventory_limit} pack slots</span></div></div>
               <section className="progression-hub">
                 <div className="progression-heading"><div><span className="section-label">Character progression</span><h3>Shape the next level</h3></div><div><b>{managedAdventurer.progression.unspent_attribute_points}</b><span>attribute points</span><b>{managedAdventurer.progression.unspent_class_upgrades}</b><span>class upgrades</span></div></div>
-                <div className="xp-progress"><div><span>Level {managedAdventurer.player.level}</span><b>{managedAdventurer.progression.next_level_xp ? `${managedAdventurer.player.xp} / ${managedAdventurer.progression.next_level_xp} XP` : "Maximum level"}</b></div><i><span style={{ width: managedAdventurer.progression.next_level_xp ? meter(managedAdventurer.player.xp - managedAdventurer.progression.current_level_xp, managedAdventurer.progression.next_level_xp - managedAdventurer.progression.current_level_xp) : "100%" }} /></i></div>
+                <div className="xp-progress"><div><span>Level {managedAdventurer.player.level}</span><b>{managedAdventurer.progression.next_level_xp ? `${managedAdventurer.player.xp} / ${managedAdventurer.progression.next_level_xp} XP` : "Maximum level"}</b></div><i><span style={{ width: managedAdventurer.progression.next_level_xp ? meter((managedAdventurer.player.xp ?? 0) - managedAdventurer.progression.current_level_xp, managedAdventurer.progression.next_level_xp - managedAdventurer.progression.current_level_xp) : "100%" }} /></i></div>
                 {(managedAdventurer.progression.unspent_attribute_points > 0 || managedAdventurer.progression.unspent_class_upgrades > 0) ? <>
-                  <div className="attribute-allocation"><span className="section-label">Allocate attributes</span><small>Choose up to one point per attribute in this confirmation. Unused points remain banked.</small><div>{Object.entries(managedAdventurer.player.stats).map(([stat, value]) => { const draft = attributeDraft[stat] || 0; const draftedTotal = Object.values(attributeDraft).reduce((sum, point) => sum + point, 0); return <article key={stat}><div><b>{stat}</b><small>{ATTRIBUTE_HELP[stat]}</small></div><button onClick={() => setAttributeDraft((current) => ({ ...current, [stat]: 0 }))} disabled={!draft}>−</button><strong>{value}{draft ? ` → ${value + draft}` : ""}</strong><button onClick={() => setAttributeDraft((current) => ({ ...current, [stat]: 1 }))} disabled={Boolean(draft) || value >= managedAdventurer.progression.attribute_cap || draftedTotal >= managedAdventurer.progression.unspent_attribute_points}>+</button></article>; })}</div></div>
-                  {managedAdventurer.progression.unspent_class_upgrades > 0 && <div className="upgrade-allocation"><span className="section-label">Choose one class upgrade</span><div>{managedAdventurer.progression.upgrade_options.map((upgrade) => <button key={upgrade.id} className={upgradeDraft === upgrade.id ? "selected" : ""} onClick={() => setUpgradeDraft(upgradeDraft === upgrade.id ? "" : upgrade.id)}><b>{upgrade.name}</b><small>{upgrade.description}</small></button>)}</div></div>}
+                  <div className="attribute-allocation"><span className="section-label">Allocate attributes</span><small>Choose up to one point per attribute in this confirmation. Unused points remain banked.</small><div>{Object.entries(managedAdventurer.player.stats).map(([stat, value]) => { const draft = attributeDraft[stat] || 0; const draftedTotal = Object.values(attributeDraft).reduce((sum, point) => sum + point, 0); return <article key={stat}><div><b>{stat}</b><small>{ATTRIBUTE_HELP[stat]}</small></div><button onClick={() => setAttributeDraft((current) => ({ ...current, [stat]: 0 }))} disabled={busy || !draft}>−</button><strong>{value}{draft ? ` → ${value + draft}` : ""}</strong><button onClick={() => setAttributeDraft((current) => ({ ...current, [stat]: 1 }))} disabled={busy || Boolean(draft) || value >= managedAdventurer.progression.attribute_cap || draftedTotal >= managedAdventurer.progression.unspent_attribute_points}>+</button></article>; })}</div></div>
+                  {managedAdventurer.progression.unspent_class_upgrades > 0 && <div className="upgrade-allocation"><span className="section-label">Choose one class upgrade</span><div>{managedAdventurer.progression.upgrade_options.map((upgrade) => <button key={upgrade.id} className={upgradeDraft === upgrade.id ? "selected" : ""} disabled={busy} onClick={() => setUpgradeDraft(upgradeDraft === upgrade.id ? "" : upgrade.id)}><b>{upgrade.name}</b><small>{upgrade.description}</small></button>)}</div></div>}
                   <div className="progression-confirm"><p><b>Pending:</b> {Object.entries(attributeDraft).filter(([, value]) => value).map(([stat]) => `${stat} +1`).join(", ") || "No attributes"}{upgradeDraft ? ` · ${managedAdventurer.progression.upgrade_options.find((item) => item.id === upgradeDraft)?.name}` : " · No class upgrade"}</p><button onClick={() => manageAdventurer("apply_progression", { allocations: attributeDraft, upgrade: upgradeDraft })} disabled={busy || (!Object.values(attributeDraft).some(Boolean) && !upgradeDraft)}>Confirm permanent changes</button></div>
                 </> : <p className="progression-empty">No upgrade decisions are pending. Earn XP in adventures to unlock more choices.</p>}
               </section>
@@ -673,7 +725,7 @@ export default function Home() {
               ))}
             </div>
           </div>}
-          <button className="begin-button" disabled={busy || (!setup.adventurer_id && spent !== 12) || !setup.name.trim() || !catalog} onClick={() => startGame(setup)}>{busy ? "Creating…" : setup.adventurer_id ? `Begin a new campaign with ${setup.name}` : "Enter the watchtower"}</button>
+          <button className="begin-button" disabled={busy || selecting || (Boolean(setup.adventurer_id) && !managedAdventurer) || (!setup.adventurer_id && spent !== 12) || !setup.name.trim() || !catalog} onClick={() => startGame(setup)}>{busy ? "Creating…" : setup.adventurer_id ? `Begin a new campaign with ${setup.name}` : "Enter the watchtower"}</button>
         </section>
       </main>
     );
@@ -695,7 +747,6 @@ export default function Home() {
     : "me";
   const lastEvent = events[events.length - 1];
   const visited = game.save.visited || [];
-  const defeated = Array.isArray(game.flags.defeated_rooms) ? game.flags.defeated_rooms as string[] : [];
   const corpses = game.flags.corpses as Record<string, Array<{ looted?: boolean }>> | undefined;
   const hasLoot = Boolean(corpses?.[game.room.id]?.some((corpse) => !corpse.looted));
   const available = game.available_actions.filter((action) => !action.informational && !["use", "companion_advice"].includes(action.id));
@@ -727,7 +778,7 @@ export default function Home() {
         <div className="header-actions">
           <button className={`icon-button ${sound ? "active" : ""}`} onClick={() => setSound(!sound)} aria-pressed={sound}>{sound ? "Sound on" : "Sound off"}</button>
           <button className={`icon-button ${voice ? "active" : ""}`} onClick={() => setVoice(!voice)} aria-pressed={voice}>{voice ? "Voice on" : "Voice off"}</button>
-          <button className="new-button" onClick={() => setShowSetup(true)}>New game</button>
+          <button className="new-button" disabled={busy} onClick={() => setShowSetup(true)}>New game</button>
         </div>
       </header>
 
@@ -741,7 +792,7 @@ export default function Home() {
         <div className="turn-counter"><span>Turn</span><b>{String(game.turn).padStart(2, "0")}</b></div>
       </section>
 
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      {error && <div className="error-banner" role="alert">{error} <button disabled={busy} onClick={returnToRoster}>Return to adventurer roster</button></div>}
 
       <section className="play-grid">
         <aside className="party-panel">
@@ -784,8 +835,8 @@ export default function Home() {
             </button>
             {game.inventory.filter((item) => item.id !== "healing_potion").map((item, index) => (
               <div className="inventory-item" key={`${item.id}-${item.name}-${index}`}>
-                <button className="item-use" onClick={() => item.kind === "armor" ? command("equip", { item: item.name }) : undefined} disabled={busy || item.kind !== "armor"}>
-                  <span className="potion">◇</span><span><b>{item.name}</b><small>{item.kind}{item.slot ? ` · ${item.slot}` : ""}</small></span><em>{item.kind === "armor" ? "+" : ""}</em>
+                <button className="item-use" onClick={() => ["armor", "weapon"].includes(item.kind) ? command("equip", { item: item.name }) : undefined} disabled={busy || !["armor", "weapon"].includes(item.kind)}>
+                  <span className="potion">◇</span><span><b>{item.name}</b><small>{item.kind}{item.slot ? ` · ${item.slot}` : ""}</small></span><em>{["armor", "weapon"].includes(item.kind) ? "+" : ""}</em>
                 </button>
                 <button className="drop-item" onClick={() => command("drop", { item: item.name })} disabled={busy || item.kind === "quest"}>Drop</button>
               </div>
@@ -884,7 +935,7 @@ export default function Home() {
             <span className="eyebrow">New campaign</span>
             <h2>Leave this adventure?</h2>
             <p>Your current game is safely stored. Creating another character starts a separate session.</p>
-            <div><button onClick={() => setShowSetup(false)}>Keep playing</button><button className="primary-confirm" onClick={() => { setGame(null); setShowSetup(true); }}>Create character</button></div>
+            <div><button onClick={() => setShowSetup(false)}>Keep playing</button><button className="primary-confirm" onClick={returnToRoster}>Create character</button></div>
           </div>
         </div>
       )}
