@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+from copy import deepcopy
 
 from ..content import get_room
 from ..state import GameState
@@ -16,18 +17,33 @@ def _flag(state: GameState) -> str:
 def active_challenge(state: GameState) -> Optional[Dict[str, Any]]:
     room = get_room(state.campaign_id, state.room_id)
     config = room.challenge_config
-    if not config or state.flags.get(_flag(state)):
+    if not config or state.game_over or state.flags.get(_flag(state)) or (config.get("completion") and state.flags.get("loot_taken")):
         return None
     options = []
     for raw in config.get("options", []):
-        option = dict(raw)
+        option = deepcopy(raw)
         requirement = option.get("requires") or {}
         available = True
         reason = None
         if requirement.get("class") and state.player.cls != requirement["class"]:
             available, reason = False, f"Requires {requirement['class']}"
-        if requirement.get("companion") and state.companion.name != requirement["companion"]:
-            available, reason = False, f"Requires {requirement['companion']}"
+        companions = [c for c in state.companions if not requirement.get("companion") or c.name == requirement["companion"]]
+        if requirement.get("companion_alive"):
+            companions = [c for c in companions if c.hp > 0]
+        if requirement.get("trust"):
+            companions = [c for c in companions if c.trust >= int(requirement["trust"])]
+        if any(requirement.get(k) for k in ("companion", "companion_alive", "trust")) and not companions:
+            available, reason = False, f"Requires living {requirement.get('companion', 'companion')} with trust {requirement.get('trust', 0)}"
+        if requirement.get("flags") and not all(state.flags.get(flag) for flag in requirement["flags"]):
+            available, reason = False, str(requirement.get("flags_reason", "Requires prior information."))
+        if requirement.get("stat"):
+            stat_req = requirement["stat"]
+            stat_ok = state.player.stats.get(stat_req["name"], 0) >= int(stat_req["minimum"])
+            ability_ok = requirement.get("ability") in state.player.chosen_upgrades if requirement.get("ability") else False
+            if not (stat_ok or ability_ok):
+                available, reason = False, f"Requires {stat_req['name']} {stat_req['minimum']} or {requirement.get('ability', 'a developed ability')}"
+        elif requirement.get("ability") and requirement["ability"] not in state.player.chosen_upgrades:
+            available, reason = False, f"Requires {requirement['ability']}"
         if requirement.get("spell_revealed") and not state.flags.get(f"detect_magic:{state.room_id}"):
             available, reason = False, "Cast Detect Magic here to reveal this approach"
         option["available"] = available
@@ -74,6 +90,17 @@ def resolve_challenge(state: GameState, option_id: str) -> Tuple[bool, str]:
     state.flags[_flag(state)] = True
 
     message = str(outcome.get("message", "You overcome the challenge." if success else "The attempt goes poorly, but another way opens."))
+    config = get_room(state.campaign_id, state.room_id).challenge_config or {}
+    if config.get("completion"):
+        from ..content import item_from_id
+        from .inventory import add_item_to_inventory
+        room = get_room(state.campaign_id, state.room_id)
+        if room.loot:
+            add_item_to_inventory(state, item_from_id(state.campaign_id, room.loot))
+        state.flags["loot_taken"] = True
+        state.flags["ending_outcome"] = str(outcome.get("ending", "restored"))
+        state.flags["ending_explanation"] = message
+        state.game_over = True
     if option.get("automatic"):
         return True, message
     guidance_text = " Guidance lends you clarity." if guidance else ""

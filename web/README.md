@@ -53,6 +53,24 @@ retry writes to the old session expecting newer character changes to disappear.
 
 ## Verification
 
+The active adventure keeps the server's current objective visible above the
+scene. Expand **Journal and known locations** for remembered discoveries and
+location statuses; hidden campaign rooms are not listed. Movement buttons use
+those same server statuses. Resuming an adventure restores this information
+from its saved state, not a browser-only checklist.
+
+**Camp** previews each party member's HP/mana gains and the elapsed turns before
+confirmation. Cancel or Escape returns focus to its opener. Confirmation sends
+one `camp` command; the Python engine performs the bounded recovery, and the
+chronicle shows its summary. The original single-turn rest remains available.
+While camp is resolving, confirmation and dismissal are disabled. Commands
+are never retried automatically; after a transport error, resume the saved
+adventure to check what actually persisted before attempting another command.
+
+Greyfen's finale uses the existing challenge buttons, including visible reasons
+for unavailable approaches; completion remains readable in the objective,
+journal, and scene when resuming.
+
 ```sh
 npm ci --include=dev
 npx playwright install chromium
@@ -69,6 +87,12 @@ npm run test:e2e
   do not start separate servers for it.
 - `npm run test:browser -- --grep progression --repeat-each=2`: repeats both
   progression scenarios with fresh per-test fixtures.
+- `npm run test:browser -- tests/browser/adventure-flow.spec.mjs --repeat-each=2`:
+  repeats disposable camp, discovery, and finale scenarios. Camp checks exact
+  payload, busy/focus handling, gains, elapsed turns, and reload persistence;
+  discovery checks mobile layout and server-known locations; finale cases check
+  prepared versus fallback options and saved completion. Requires the matching
+  Python journey/camp/finale implementation.
 - `PYTHON=/path/to/python3.14 npm test` selects an interpreter explicitly. This
   is useful on macOS where `python3` can still mean Apple's older interpreter.
 - Linux CI may need `npx playwright install --with-deps chromium`.

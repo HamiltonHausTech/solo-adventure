@@ -22,6 +22,8 @@ ROOMS: Dict[str, Room] = {
             "stat": "INT",
             "dc": 13,
             "success_flag": "scout_helped",
+            "success_recap": "You win Eryn's trust. She points out a safe route and warns you about a lone bandit inside.",
+            "fail_recap": "Eryn stays guarded. She gives no help, but allows you to pass.",
             "success_msg": "You win Eryn's trust (roll {roll} -> {total}). She points out a safe route and warns you about a lone bandit inside.",
             "fail_msg": "Eryn stays guarded (roll {roll} -> {total}). She gives no help, but allows you to pass.",
             "done_flag": "social_done",

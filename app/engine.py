@@ -33,6 +33,8 @@ from .rules import (
     use_item,
 )
 from .state import GameState
+from .rules.rest import camp_preview, apply_camp
+from .journey import journey_snapshot, room_description, exploration_action, location_statuses
 from .rules.combat import resolve_player_action
 from .rules.exploration import select_corpse_targets
 from .rules.spells import (
@@ -222,7 +224,7 @@ class HeadlessEngine:
             "room": {
                 "id": room.room_id,
                 "name": room.name,
-                "description": room.description,
+                "description": room_description(state),
                 "kind": room.kind,
                 "exits": get_exits(state.campaign_id, state.room_id),
             },
@@ -239,6 +241,8 @@ class HeadlessEngine:
             "available_actions": self.available_actions(),
             "spellbook": self.spellbook(),
             "challenge": active_challenge(state),
+            "camp": camp_preview(state),
+            "journey": journey_snapshot(state),
             "game_over": state.game_over,
             "save": state.to_dict(),
         })
@@ -263,11 +267,12 @@ class HeadlessEngine:
             if state.player.learned_spells:
                 actions.append({"id": "spellbook", "label": "Open spellbook"})
             return actions + common
+        camp = camp_preview(state)
         actions = [
-            {"id": "talk", "label": "Talk"},
-            {"id": "search", "label": "Search"},
-            {"id": "loot", "label": "Loot", "requires": ["target?"]},
+            exploration_action(state, action) for action in ("talk", "search", "loot")
+        ] + [
             {"id": "rest", "label": "Rest"},
+            {"id": "camp", "label": "Camp", "disabled": not camp["available"], "disabled_reason": camp["reason"], "description": f"Recover for {camp['recovery_turns']} turns", "preview": camp},
         ]
         if state.player.learned_spells:
             actions.append({"id": "spellbook", "label": "Open spellbook"})
@@ -289,7 +294,8 @@ class HeadlessEngine:
                 actions.append(
                     {
                         "id": "move",
-                        "label": f"Move to {get_room(state.campaign_id, destination).name}",
+                        "label": f"Move to {get_room(state.campaign_id, destination).name} · {', '.join(location_statuses(state, destination))}",
+                        "statuses": location_statuses(state, destination),
                         "target": destination,
                         "disabled": bool(challenge and challenge["required"]),
                         "disabled_reason": "Resolve the required challenge before moving." if challenge and challenge["required"] else None,
@@ -356,6 +362,7 @@ class HeadlessEngine:
         before = self._metrics()
         messages: List[str] = []
         accepted = True
+        turns = 1
 
         if normalized == "move":
             if self.state.in_combat:
@@ -368,6 +375,17 @@ class HeadlessEngine:
             if not ok:
                 return self._rejected(normalized, message)
             messages.append(message)
+        elif normalized == "camp":
+            if any(value is not None for value in (target, spell, item)):
+                return self._rejected(normalized, "Camp takes no parameters.")
+            preview = camp_preview(self.state)
+            if not preview["available"]:
+                return self._rejected(normalized, preview["reason"])
+            turns = preview["recovery_turns"]
+            summary = apply_camp(self.state, preview)
+            from .rules.companion_interactions import rest_reaction
+            reaction = rest_reaction(self.state)
+            messages.append(summary + (" " + reaction if reaction else ""))
         elif normalized == "rest":
             if self.state.in_combat:
                 return self._rejected(normalized, "You cannot rest during combat.")
@@ -386,6 +404,8 @@ class HeadlessEngine:
                 return self._rejected(normalized, message)
             messages.append(message)
         elif normalized == "companion_talk":
+            if self.state.companion.hp <= 0:
+                return self._rejected(normalized, "Your fallen companion cannot converse.")
             if self.state.in_combat:
                 return self._rejected(normalized, "There is no time for a conversation during combat.")
             from .rules.companion_interactions import talk_to_companion
@@ -488,15 +508,21 @@ class HeadlessEngine:
                 _, error = select_corpse_targets(self.state, target)
                 if error:
                     return self._rejected(command, error)
+            room = get_room(self.state.campaign_id, self.state.room_id)
+            if room.challenge_config and room.challenge_config.get("completion") and any(value is not None for value in (target, spell, item)):
+                return self._rejected(normalized, "Choose a challenge approach, or restore the seal without parameters.")
+            availability = exploration_action(self.state, normalized)
+            if availability.get("disabled"):
+                return self._rejected(normalized, availability["disabled_reason"])
             action = normalized
             if target and normalized == "loot":
                 action = f"loot {target}"
             messages.append(apply_exploration_action(self.state, action))
 
-        self.state.turn += 1
+        self.state.turn += turns
         self.state.last_player_input = command
         self.state.last_event = " ".join(messages)
-        if normalized != "rest":
+        if normalized not in {"rest", "camp"}:
             reset_rest_streak(self.state)
         self._award_completion_once(messages)
         after = self._metrics()

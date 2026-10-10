@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .profiles import CompanionProfile, MobProfile
 
@@ -38,6 +38,7 @@ class Campaign:
     recommended_level: int = 1
     max_item_tier: int = 1
     repeat_reward_multiplier: float = 0.35
+    journey_config: Dict[str, Any] = field(default_factory=dict)
 
 
 CAMPAIGNS: Dict[str, Campaign] = {}

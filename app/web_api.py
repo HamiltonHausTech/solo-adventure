@@ -13,7 +13,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 
 from .content import list_campaigns
-from .engine import HeadlessEngine
+from .engine import CommandResult, HeadlessEngine
 from .profiles import CLASS_PROFILES, RACE_PROFILES, get_companion_archetype
 from .rules import apply_progression_choices, buy_healing_potions, buy_shop_item, drop_item, equip_item, sell_item, unequip_item
 from .storage import GameStore, StaleAdventurerError
@@ -325,12 +325,15 @@ class GameAPIHandler(BaseHTTPRequestHandler):
                 if not command:
                     self._send(HTTPStatus.BAD_REQUEST, {"error": "Command is required."})
                     return
-                result = engine.execute(
-                    command,
-                    target=payload.get("target"),
-                    spell=payload.get("spell"),
-                    item=payload.get("item"),
-                )
+                if command.lower() == "camp" and set(payload) - {"command"}:
+                    result = CommandResult(False, command, [], engine.snapshot(), "Camp takes no parameters.")
+                else:
+                    result = engine.execute(
+                        command,
+                        target=payload.get("target"),
+                        spell=payload.get("spell"),
+                        item=payload.get("item"),
+                    )
                 if result.accepted:
                     _save_session(session_id, engine)
             status = HTTPStatus.OK if result.accepted else HTTPStatus.UNPROCESSABLE_ENTITY
