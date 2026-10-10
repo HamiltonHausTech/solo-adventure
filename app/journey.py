@@ -102,8 +102,9 @@ def journey_snapshot(state):
         objective = {"title": "Adventure complete" if state.player.hp > 0 else "Adventure ended", "description": state.flags.get("ending_explanation", "Your journey here has ended.")}
     elif challenge and challenge["required"]:
         objective = {"title": challenge["title"], "description": f"{challenge['prompt']} Resolve this challenge before moving on."}
-    elif get_room(state.campaign_id, state.room_id).kind == "social" and exploration_action(state, "talk")["disabled"]:
-        objective["description"] = config.get("onward", {}).get(state.room_id, "You have heard what there is to learn here. Continue through an available exit.")
+    elif get_room(state.campaign_id, state.room_id).kind == "social":
+        if exploration_action(state, "talk")["disabled"]:
+            objective["description"] = config.get("onward", {}).get(state.room_id, "You have heard what there is to learn here. Continue through an available exit.")
     elif "Searched" in location_statuses(state, state.room_id):
         objective["description"] = config.get("onward", {}).get(state.room_id, "This area has been searched. Continue through an available exit.")
     return {"objective": objective, "journal": journal, "locations": locations}

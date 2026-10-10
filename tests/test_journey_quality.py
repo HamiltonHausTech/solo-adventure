@@ -4,7 +4,7 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from app.content import get_room
+from app.content import get_campaign, get_room
 from app.engine import HeadlessEngine
 from app.rules.exploration import apply_exploration_action
 
@@ -58,6 +58,59 @@ class LegacyConversationTests(unittest.TestCase):
         e = HeadlessEngine.new(campaign_id="ruined_watchtower")
         self.assertEqual(e.snapshot()["journey"]["journal"], [])
         self.assertFalse(next(x for x in e.available_actions() if x["id"] == "talk")["disabled"])
+
+
+class SocialObjectiveTests(unittest.TestCase):
+    def social_rooms(self):
+        campaign = get_campaign("embers_of_greyfen")
+        rooms = [room for room in campaign.rooms.values() if room.kind == "social"]
+        self.assertEqual({room.room_id for room in rooms}, {"greyfen_road", "signal_tower", "refuge"})
+        return campaign, rooms
+
+    def snapshots_before_and_after_restore(self, engine):
+        return [engine.snapshot(), HeadlessEngine.restore(json.loads(json.dumps(engine.state.to_dict()))).snapshot()]
+
+    def test_search_preserves_unfinished_social_objectives(self):
+        campaign, rooms = self.social_rooms()
+        for room in rooms:
+            with self.subTest(room=room.room_id):
+                e = HeadlessEngine.new(campaign_id=campaign.campaign_id)
+                e.state.room_id = room.room_id
+                expected = deepcopy(e.snapshot()["journey"]["objective"])
+                self.assertIn("Speak with", expected["description"])
+                self.assertTrue(e.execute("search").accepted)
+                for snap in self.snapshots_before_and_after_restore(e):
+                    talk = next(x for x in snap["available_actions"] if x["id"] == "talk")
+                    self.assertFalse(talk["disabled"])
+                    self.assertIn("Searched", next(x for x in snap["journey"]["locations"] if x["id"] == room.room_id)["statuses"])
+                    self.assertEqual(snap["journey"]["objective"], expected)
+                    if room.room_id == "refuge":
+                        self.assertIn("Preparation here is optional.", expected["description"])
+                        self.assertIsNotNone(snap["challenge"])
+                        self.assertFalse(snap["challenge"]["required"])
+
+    def test_completed_social_objectives_point_onward_for_both_outcomes(self):
+        campaign, rooms = self.social_rooms()
+        for room in rooms:
+            for searched in (False, True):
+                for success in (False, True):
+                    with self.subTest(room=room.room_id, searched=searched, success=success):
+                        e = HeadlessEngine.new(campaign_id=campaign.campaign_id)
+                        e.state.room_id = room.room_id
+                        if searched:
+                            self.assertTrue(e.execute("search").accepted)
+                        with patch("app.rules.exploration.check", return_value=(success, 20 if success else 1, 22 if success else 3)):
+                            self.assertTrue(e.execute("talk").accepted)
+                        for snap in self.snapshots_before_and_after_restore(e):
+                            talk = next(x for x in snap["available_actions"] if x["id"] == "talk")
+                            self.assertTrue(talk["disabled"])
+                            objective = snap["journey"]["objective"]
+                            self.assertEqual(objective["title"], campaign.journey_config["objectives"][room.room_id]["title"])
+                            self.assertEqual(objective["description"], campaign.journey_config["onward"][room.room_id])
+                            if room.room_id == "refuge":
+                                self.assertIn("You may prepare here first.", objective["description"])
+                                self.assertIsNotNone(snap["challenge"])
+                                self.assertFalse(snap["challenge"]["required"])
 
 
 class RequiredChallengeObjectiveTests(unittest.TestCase):
