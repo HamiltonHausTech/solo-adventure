@@ -44,15 +44,27 @@ ROOMS: Dict[str, Room] = {
             "A heavy iron gate blocks the descent. Rust has weakened the mechanism. "
             "A careful hand might ease it open, or force could break it."
         ),
-        kind="social",
-        npc=None,
-        social_config={
-            "stat": "DEX",
-            "dc": 11,
-            "success_flag": "gate_opened",
-            "success_msg": "You work the latch free (roll {roll} -> {total}). The gate swings open silently.",
-            "fail_msg": "The mechanism resists (roll {roll} -> {total}). You can try again or force it.",
-            "done_flag": "gate_done",
+        kind="passage",
+        challenge_config={
+            "title": "The Warded Gate",
+            "prompt": "Four funerary runes surround the corroded latch. The gate can be understood, bypassed, or forced.",
+            "required": True,
+            "options": [
+                {"id": "read_sequence", "label": "Study the rune sequence", "description": "Universal · Intelligence check", "stat": "INT", "dc": 12,
+                 "success": {"message": "You order the funerary symbols—name, breath, silence, rest—and the ward releases."},
+                 "failure": {"message": "The final rune flares as you choose poorly; the gate opens, but the ward burns you", "damage": 2, "flags": {"crypt_ward_disturbed": True}}},
+                {"id": "cleric_rite", "label": "Recite the rite of rest", "description": "Cleric · Wisdom check", "stat": "WIS", "dc": 9, "requires": {"class": "Cleric"},
+                 "success": {"message": "You complete the old rite. The runes dim in reverence and the gate opens."},
+                 "failure": {"message": "Your rite is imperfect, but the ward recognizes enough to release with a cold backlash", "damage": 1}},
+                {"id": "rogue_trigger", "label": "Disable the physical trigger", "description": "Rogue · Dexterity check", "stat": "DEX", "dc": 10, "requires": {"class": "Rogue"},
+                 "success": {"message": "You pin the hidden trigger and lift the latch without waking the ward."},
+                 "failure": {"message": "The trigger snaps, opening the gate while its ward marks your passage", "damage": 1, "flags": {"crypt_ward_disturbed": True}}},
+                {"id": "force_gate", "label": "Force the weakened gate", "description": "Universal fallback · Strength check", "stat": "STR", "dc": 14,
+                 "success": {"message": "Iron shrieks against stone as you wrench the gate open."},
+                 "failure": {"message": "The gate finally tears free and crashes into the crypt, alerting what waits below", "damage": 2, "flags": {"crypt_ward_disturbed": True}}},
+                {"id": "trace_ward", "label": "Trace the revealed ward", "description": "Revealed by Detect Magic · automatic", "automatic": True, "requires": {"spell_revealed": True},
+                 "success": {"message": "The active rune shines plainly to your arcane sight. One touch unthreads the ward."}},
+            ],
         },
     ),
     "hallway": Room(

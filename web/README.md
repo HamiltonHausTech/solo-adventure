@@ -1,100 +1,107 @@
-# vinext-starter
+# Solo Adventure browser client (local only)
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+This React/vinext interface talks to the authoritative Python game API. It is a
+**single-user, local-only application**, not a public hosted service. Keep both
+servers on loopback. The API has no user authentication or authorization; CORS
+is not authentication. Remote frontend origins are unsupported. The optional
+Cloudflare/D1 starter files are not the game's persistence layer and do not make
+this application safe to publish.
 
-## Prerequisites
+## Run locally
 
-- Node.js `>=22.13.0`
+Prerequisites: Node.js >=22.13, npm, and Python 3.14 (or the Python version
+supported by the repository). From the repository root, start the API using a
+SQLite path you explicitly choose:
 
-## Quick Start
+```sh
+python3 -m app.web_api --host 127.0.0.1 --port 8000 --database /path/to/games.sqlite
+```
 
-```bash
-npm install
+In a second terminal:
+
+```sh
+cd web
+npm ci --include=dev
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+Open the localhost URL printed by vinext. The API permits HTTP/HTTPS origins on
+`localhost`, `127.0.0.1`, and `::1` at any port. Do not use a LAN address, tunnel,
+or public hostname.
 
-## Included Shape
+### API configuration
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+`app/api.ts` owns all game API transport. Its default is
+`http://127.0.0.1:8000`. To run another **local** API port:
 
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```sh
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8010 npm run dev
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+This public setting is embedded in the client build; set it before `npm run
+build` as well when using a built bundle. It is not a secret or a deployment/auth
+configuration. Requests time out after 15 seconds. Catalog connection failures
+show an actionable retry screen; retry reloads the catalog rather than creating
+a character. Saved adventures and adventurers load independently; a failed list
+shows an alert and **Retry saved lists**, preserving already loaded entries.
+Command failures are never automatically replayed.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+A hub edit or a newer adventure can make an older session read-only. HTTP 409
+errors preserve the server's explanation and offer **Return to adventurer
+roster**. Select the current adventurer there and begin a new campaign; do not
+retry writes to the old session expecting newer character changes to disappear.
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## Verification
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+```sh
+npm ci --include=dev
+npx playwright install chromium
+npm test
+npm run lint
+npm run typecheck
+npm run test:e2e
+```
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+- `npm test`: builds, runs two current SSR checks, then the Chromium regressions.
+- `npm run test:ssr`: build and SSR checks only.
+- `npm run test:e2e` / `npm run test:browser`: builds and serves the production
+  frontend bundle, then runs Chromium against it and a disposable Python API;
+  do not start separate servers for it.
+- `npm run test:browser -- --grep progression --repeat-each=2`: repeats both
+  progression scenarios with fresh per-test fixtures.
+- `PYTHON=/path/to/python3.14 npm test` selects an interpreter explicitly. This
+  is useful on macOS where `python3` can still mean Apple's older interpreter.
+- Linux CI may need `npx playwright install --with-deps chromium`.
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+Tests reserve frontend `localhost:18765` and API `127.0.0.1:18800`; both ports
+must be free. The Playwright config allocates a unique directory and
+`tests/servers.mjs` starts the API with a SQLite database under the OS
+scratch directory (`TMPDIR` when set), never the user's game database, and
+removes it on normal shutdown. No LLM is called. Playwright traces on failure
+are local ignored files under `test-results/`.
 
-## Useful Commands
+### Coverage and boundaries
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+Real browser interactions against the real Python API cover character creation,
+armor equip, entering combat and attacking, persisted reload/resume, and
+attribute/class progression confirmation. The progression test seeds earned
+points into a fresh, uniquely named character before every test attempt using
+a bounded local Python helper restricted to the disposable database. This also
+works on repeats/retries; it tests real confirmation and
+persistence, not grinding an entire campaign for XP. It also verifies a genuine
+409 after the hub edit and navigation back to the roster.
 
-## Learn More
+Controlled browser routes cover each saved-list endpoint returning 503 while
+the other succeeds, retry without game creation, obsolete roster responses,
+and network/HTTP/invalid-JSON catalog outages,
+out-of-order adventurer successes/errors, clearing a pending selection,
+management busy guards, active-game weapon equip, and a stale-session error.
+The provisioner test checks initial focus, Tab containment, Escape dismissal,
+and focus restoration. The same focus hook serves spellbook/new-game dialogs.
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+The suite is Chromium-only; it does not claim exhaustive campaign completion,
+Safari/Firefox coverage, audio playback verification, or a full accessibility
+audit. Audio uses one reusable context per mounted game screen and closes it
+on unmount. Broader cosmetic component splitting was intentionally avoided:
+transport, connection UI, and dialog focus handling are isolated while the
+existing game layout is preserved.

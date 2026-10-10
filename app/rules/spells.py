@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Tuple
 
 # Spells Wizards can learn (beyond starting spell)
-WIZARD_LEARNABLE_SPELLS: List[str] = ["Magic Missile", "Shield", "Sleep"]
+WIZARD_LEARNABLE_SPELLS: List[str] = ["Magic Missile", "Shield", "Sleep", "Detect Magic"]
 
 # Spells Clerics can learn (beyond starting spell)
-CLERIC_LEARNABLE_SPELLS: List[str] = ["Sacred Flame", "Shield", "Bless"]
+CLERIC_LEARNABLE_SPELLS: List[str] = ["Shield", "Bless", "Guidance"]
+
+
+@dataclass(frozen=True)
+class SpellDefinition:
+    name: str
+    category: str
+    mana_cost: int
+    contexts: tuple[str, ...]
+    target_type: str
+    description: str
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+SPELLS: Dict[str, SpellDefinition] = {
+    "Spark": SpellDefinition("Spark", "damage", 2, ("combat",), "enemy", "A small arcane bolt dealing 1d4 damage."),
+    "Magic Missile": SpellDefinition("Magic Missile", "damage", 2, ("combat",), "enemy", "A focused arcane dart dealing 1d6 damage."),
+    "Sacred Flame": SpellDefinition("Sacred Flame", "damage", 2, ("combat",), "enemy", "Sacred fire dealing 1d6 damage, guided by Wisdom."),
+    "Cure Wounds": SpellDefinition("Cure Wounds", "healing", 2, ("combat", "exploration"), "wounded_ally", "Restore 1d8+2 health to yourself or a living companion."),
+    "Shield": SpellDefinition("Shield", "defense", 2, ("combat",), "self", "Gain +2 Armor until your next turn."),
+    "Sleep": SpellDefinition("Sleep", "control", 3, ("combat",), "enemy", "Attempt to put one enemy to sleep."),
+    "Bless": SpellDefinition("Bless", "support", 2, ("combat",), "ally", "Give yourself or your companion +1 Armor and attack until your next turn."),
+    "Detect Magic": SpellDefinition("Detect Magic", "utility", 1, ("exploration",), "self", "Read the magical traces in your current location."),
+    "Guidance": SpellDefinition("Guidance", "utility", 1, ("exploration",), "self", "Gain +2 on your next social, search, or lock check."),
+}
 
 # Damage spells: name -> (damage_expr, mana_cost). Used in combat.
 SPELL_DAMAGE: Dict[str, tuple[str, int]] = {
@@ -31,7 +58,13 @@ SPELL_MANA: Dict[str, int] = {
     "Cure Wounds": 2,
     "Sacred Flame": 2,
     "Bless": 2,
+    "Detect Magic": 1,
+    "Guidance": 1,
 }
+
+
+def get_spell_definition(spell_name: str) -> Optional[SpellDefinition]:
+    return SPELLS.get(spell_name)
 
 
 def resolve_spell_name(learned_spells: List[str], query: str) -> Tuple[Optional[str], Optional[str]]:

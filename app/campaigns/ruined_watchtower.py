@@ -6,7 +6,7 @@ from ..content import Campaign, Room, register_campaign
 from ..profiles import CompanionProfile, MobProfile
 
 
-ROOM_ORDER = ["courtyard", "cellar", "barracks", "spire"]
+ROOM_ORDER = ["courtyard", "collapsed_passage", "cellar", "barracks", "spire"]
 
 ROOMS: Dict[str, Room] = {
     "courtyard": Room(
@@ -36,6 +36,30 @@ ROOMS: Dict[str, Room] = {
         ),
         kind="combat",
         enemy_name="Watchtower Bandit",
+    ),
+    "collapsed_passage": Room(
+        room_id="collapsed_passage",
+        name="Collapsed Passage",
+        description="A fallen support blocks the cellar stairs. Dust sifts from the ceiling with every movement.",
+        kind="passage",
+        challenge_config={
+            "title": "The Unstable Support",
+            "prompt": "Find a way through without bringing the cellar ceiling down on the party.",
+            "required": True,
+            "options": [
+                {"id": "clear_debris", "label": "Clear the debris", "description": "Universal · Strength check", "stat": "STR", "dc": 11,
+                 "success": {"message": "You shift the rubble carefully and open a stable path."},
+                 "failure": {"message": "The stones give way, but you scramble through before the passage settles", "damage": 2}},
+                {"id": "rogue_gap", "label": "Slip behind the support", "description": "Rogue · Dexterity check", "stat": "DEX", "dc": 9, "requires": {"class": "Rogue"},
+                 "success": {"message": "You slip through and release the bracing stones safely from behind."},
+                 "failure": {"message": "The gap pinches shut as you pass, bruising you before the route opens", "damage": 1}},
+                {"id": "torvald_brace", "label": "Brace it with Torvald", "description": "Companion-assisted · Strength check", "stat": "STR", "bonus": 2, "dc": 9, "requires": {"companion": "Torvald"},
+                 "success": {"message": "Torvald shoulders the beam while you clear a safe opening."},
+                 "failure": {"message": "The beam bucks under Torvald's shoulder, but together you force a narrow route", "damage": 1}},
+                {"id": "arcane_support", "label": "Follow the arcane fault", "description": "Revealed by Detect Magic · automatic", "automatic": True, "requires": {"spell_revealed": True},
+                 "success": {"message": "The enchanted stress lines reveal exactly which stone releases the blockage safely."}},
+            ],
+        },
     ),
     "cellar": Room(
         room_id="cellar",
@@ -189,8 +213,9 @@ RUINED_WATCHTOWER = Campaign(
     recommended_level=1,
     max_item_tier=1,
     exits={
-        "courtyard": {"down": "cellar", "cellar": "cellar", "up": "barracks", "barracks": "barracks"},
-        "cellar": {"up": "courtyard", "courtyard": "courtyard"},
+        "courtyard": {"down": "collapsed_passage", "collapsed_passage": "collapsed_passage", "up": "barracks", "barracks": "barracks"},
+        "collapsed_passage": {"up": "courtyard", "courtyard": "courtyard", "down": "cellar", "cellar": "cellar"},
+        "cellar": {"up": "collapsed_passage", "collapsed_passage": "collapsed_passage"},
         "barracks": {"down": "courtyard", "courtyard": "courtyard", "up": "spire", "spire": "spire"},
         "spire": {"down": "barracks", "barracks": "barracks"},
     },

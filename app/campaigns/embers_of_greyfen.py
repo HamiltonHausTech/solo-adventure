@@ -110,6 +110,21 @@ ROOMS: Dict[str, Room] = {
             "success_msg": "You piece together Nessa's guarded history (d20 {roll} + {stat} {bonus:+d} = {total} vs DC {dc}). The Ember Heart is a seal, not a treasure, and its removal is waking the keep.",
             "fail_msg": "Nessa withholds the refuge's oldest secret (d20 {roll} + {stat} {bonus:+d} = {total} vs DC {dc}), though she confirms the raiders entered Blackbriar at dusk.",
         },
+        challenge_config={
+            "title": "Prepare for Blackbriar",
+            "prompt": "Before leaving the refuge, you may seek one advantage for the fighting ahead. This opportunity is optional.",
+            "required": False,
+            "options": [
+                {"id": "survey_tracks", "label": "Survey the raider tracks", "description": "Universal · Wisdom check", "stat": "WIS", "dc": 12,
+                 "success": {"message": "You identify the raiders' favored ambush pattern. Your next attack gains +2", "flags": {"prepared_strike": 2}},
+                 "failure": {"message": "Rain has spoiled the trail. You lose time but suffer no lasting setback."}},
+                {"id": "persuade_nessa", "label": "Press Nessa for a weakness", "description": "Charisma check", "stat": "CHA", "dc": 13,
+                 "success": {"message": "Nessa reveals the keep guard's blind approach. Your next attack gains +2", "flags": {"prepared_strike": 2}},
+                 "failure": {"message": "Nessa refuses to gamble more lives on an unproven plan."}},
+                {"id": "eldrin_runes", "label": "Study the route with Eldrin", "description": "Eldrin · automatic", "automatic": True, "requires": {"companion": "Eldrin"},
+                 "success": {"message": "Eldrin recognizes old boundary marks and plots a precise opening strike", "flags": {"prepared_strike": 2}}},
+            ],
+        },
     ),
     "old_forest": Room(
         room_id="old_forest",
@@ -187,7 +202,7 @@ COMPANIONS: Dict[str, CompanionProfile] = {
 
 MOBS: Dict[str, MobProfile] = {
     "Blackbriar Outriders": MobProfile(name="Blackbriar Outriders", hp=7, count=3, ac=12, attack_bonus=2, damage="1d4+1", loot={"gold": "2d6", "items": ["briar_guard", "briar_gloves"], "item_chance": 25}, xp=35),
-    "Bog Hounds": MobProfile(name="Bog Hounds", hp=8, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "1d4"}, xp=35),
+    "Bog Hounds": MobProfile(name="Bog Hounds", hp=8, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "1d4"}, xp=35, on_hit_condition={"id": "poisoned", "dc": 12, "duration": 2}),
     "Thornbound Dead": MobProfile(name="Thornbound Dead", hp=9, count=2, ac=13, attack_bonus=3, damage="1d6", loot={"gold": "2d4", "items": ["greyfen_mail", "greyfen_greaves"], "item_chance": 30}, xp=45),
     "Gate Marauders": MobProfile(name="Gate Marauders", hp=11, count=2, ac=14, attack_bonus=3, damage="1d6+1", loot={"gold": "3d6", "items": ["briar_guard"], "item_chance": 30}, ai="focus_player", xp=55),
     "Captain Veyra": MobProfile(name="Captain Veyra", hp=22, ac=15, attack_bonus=4, damage="1d8+1", loot={"gold": "4d6", "items": ["greyfen_mail"]}, ai="focus_player", xp=100),

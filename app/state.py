@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -32,13 +33,14 @@ class Character:
     chosen_upgrades: List[str] = field(default_factory=list)
     campaign_completions: Dict[str, int] = field(default_factory=dict)
     discovered_unique_items: List[str] = field(default_factory=list)
+    conditions: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
             "name": self.name,
             "race": self.race,
             "cls": self.cls,
-            "stats": self.stats,
+            "stats": dict(self.stats),
             "hp": self.hp,
             "max_hp": self.max_hp,
             "ac": self.ac,
@@ -58,6 +60,7 @@ class Character:
             "chosen_upgrades": list(self.chosen_upgrades),
             "campaign_completions": dict(self.campaign_completions),
             "discovered_unique_items": list(self.discovered_unique_items),
+            "conditions": dict(self.conditions),
         }
 
     @staticmethod
@@ -94,7 +97,7 @@ class Character:
             gold=int(data.get("gold", 0)),
             xp=int(data.get("xp", 0)),
             level=level,
-            learned_spells=learned,
+            learned_spells=list(learned),
             unspent_attribute_points=max(
                 0,
                 int(data.get("unspent_attribute_points", (level - 1) * 2 if legacy_rewards else 0)),
@@ -109,6 +112,7 @@ class Character:
                 for key, value in dict(data.get("campaign_completions", {})).items()
             },
             discovered_unique_items=[str(item) for item in data.get("discovered_unique_items", [])],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -120,6 +124,7 @@ class Mob:
     ac: int
     attack_bonus: int
     damage: str
+    conditions: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -129,6 +134,7 @@ class Mob:
             "ac": self.ac,
             "attack_bonus": self.attack_bonus,
             "damage": self.damage,
+            "conditions": dict(self.conditions),
         }
 
     @classmethod
@@ -140,6 +146,7 @@ class Mob:
             ac=int(data["ac"]),
             attack_bonus=int(data["attack_bonus"]),
             damage=data["damage"],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -183,6 +190,7 @@ class Companion(Mob):
             mood=str(data.get("mood", "steady")),
             tactic=str(data.get("tactic", "balanced")),
             memories=list(data.get("memories", []))[-20:],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -205,6 +213,7 @@ class Enemy(Mob):
             ac=mob.ac,
             attack_bonus=mob.attack_bonus,
             damage=mob.damage,
+            conditions=dict(mob.conditions),
             asleep=bool(data.get("asleep", False)),
         )
 
@@ -245,6 +254,7 @@ class GameState:
     rest_streak: int = 0
     pending_level_choices: List[Dict[str, Any]] = field(default_factory=list)
     adventurer_id: Optional[str] = None
+    adventurer_revision: Optional[int] = None
 
     @property
     def companion(self) -> Companion:
@@ -252,7 +262,7 @@ class GameState:
         return self.companions[0]
 
     def to_dict(self) -> Dict:
-        return {
+        return deepcopy({
             "version": 1,
             "campaign_id": self.campaign_id,
             "player": self.player.to_dict(),
@@ -281,10 +291,12 @@ class GameState:
             "rest_streak": self.rest_streak,
             "pending_level_choices": list(self.pending_level_choices),
             "adventurer_id": self.adventurer_id,
-        }
+            "adventurer_revision": self.adventurer_revision,
+        })
 
     @staticmethod
     def from_dict(data: Dict) -> "GameState":
+        data = deepcopy(data)
         campaign_id = data.get("campaign_id", "ruined_watchtower")
         raw_inventory = data.get("inventory", [])
         inventory: List[Dict[str, Any]] = []
@@ -345,6 +357,7 @@ class GameState:
                 if isinstance(choice, dict) and choice.get("type") != "spell"
             ],
             adventurer_id=data.get("adventurer_id"),
+            adventurer_revision=(int(data["adventurer_revision"]) if data.get("adventurer_revision") is not None else None),
         )
         from .rules.inventory import normalize_inventory
 

@@ -63,7 +63,6 @@ def _apply_level_up(state: GameState) -> str:
         state.player.attack_bonus += 1
     if is_caster(state.player.cls):
         state.player.max_mana += 2
-        state.player.mana = state.player.max_mana
 
     return (
         f"Level up! {state.player.name} is now level {state.player.level}. "

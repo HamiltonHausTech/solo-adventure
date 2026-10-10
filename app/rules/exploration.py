@@ -13,6 +13,12 @@ from .inventory import add_item_to_inventory, can_add_item, roll_loot
 from .dice import check, roll_dice
 
 
+def _guidance_bonus(state: GameState) -> int:
+    if not state.flags.pop("guidance_active", False):
+        return 0
+    return 2
+
+
 def start_room(state: GameState, room: Room) -> str:
     if room.room_id not in state.visited:
         state.visited.append(room.room_id)
@@ -39,17 +45,18 @@ def _handle_social_room(state: GameState, room: Room, action: str) -> Optional[s
     done_flag = cfg.get("done_flag", "social_done")
 
     if action in {"talk", "speak", "parley", "approach"}:
-        stat_bonus = state.player.stats.get(stat_key, 0)
+        guidance = _guidance_bonus(state)
+        stat_bonus = state.player.stats.get(stat_key, 0) + guidance
         success, roll, total = check(stat_bonus, dc)
         state.flags[str(done_flag)] = True
         if success and success_flag:
             state.flags[str(success_flag)] = True
         if success and success_msg:
-            return str(success_msg).format(
+            return ("Guidance steadies you. " if guidance else "") + str(success_msg).format(
                 roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
             )
         if not success and fail_msg:
-            return str(fail_msg).format(
+            return ("Guidance steadies you. " if guidance else "") + str(fail_msg).format(
                 roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
             )
         # Fallback if no config messages
@@ -76,7 +83,8 @@ def _handle_loot_room(state: GameState, room: Room, action: str) -> Optional[str
     if action in {"search", "open", "loot", "inspect"}:
         if state.flags.get(taken_flag):
             return "The chest is already open and empty."
-        stat_bonus = state.player.stats.get(stat_key, 0)
+        guidance = _guidance_bonus(state)
+        stat_bonus = state.player.stats.get(stat_key, 0) + guidance
         success, roll, total = check(stat_bonus, dc)
         if success:
             if win_item_id:
@@ -91,52 +99,58 @@ def _handle_loot_room(state: GameState, room: Room, action: str) -> Optional[str
             if game_over:
                 state.game_over = True
             if success_msg:
-                return str(success_msg).format(roll=roll, total=total)
+                return ("Guidance steadies you. " if guidance else "") + str(success_msg).format(roll=roll, total=total)
             return f"You work the lock free (roll {roll} -> {total})."
         state.flags[failed_flag] = True
         if fail_msg:
-            return str(fail_msg).format(roll=roll, total=total)
+            return ("Guidance steadies you. " if guidance else "") + str(fail_msg).format(roll=roll, total=total)
         return f"Your tools slip (roll {roll} -> {total}). The lock resists for now."
     if action in {"leave", "move", "continue", "go"}:
         return "There's nowhere left to go but the chest."
     return None
 
 
+def select_corpse_targets(state: GameState, query: Optional[str]) -> tuple[List[Dict], Optional[str]]:
+    """Resolve persistent corpse IDs without mutating state during validation."""
+    if query is not None and not isinstance(query, str):
+        return [], "A target must be text."
+    corpses = state.flags.get("corpses", {})
+    entries = corpses.get(state.room_id, []) if isinstance(corpses, dict) else []
+    if not isinstance(entries, list) or not entries:
+        return [], "Nothing here to loot."
+    unlooted = [entry for entry in entries if not entry.get("looted")]
+    if not unlooted:
+        return [], "You already searched the corpses."
+    token = (query or "").strip().lower()
+    if token == "all":
+        return unlooted, None
+    if not token:
+        if len(unlooted) > 1:
+            return [], "Multiple corpses here. Use 'loot <number>' or 'loot all'."
+        return unlooted, None
+    if token.isascii() and token.isdecimal():
+        matches = [entry for entry in unlooted if str(entry.get("id")) == token.lstrip("0")]
+    else:
+        matches = [entry for entry in unlooted if token in str(entry.get("name", "")).lower()]
+    if not matches:
+        return [], "No such unlooted corpse."
+    if len(matches) > 1:
+        return [], "Be more specific."
+    return matches, None
+
+
 def _handle_combat_room_post_fight(
     state: GameState, room: Room, action: str
 ) -> Optional[str]:
     """Handle post-combat actions: looting corpses, searching."""
-    defeated_rooms = get_flag_list(state, "defeated_rooms")
+    defeated_rooms = state.flags.get("defeated_rooms", [])
     if room.room_id not in defeated_rooms:
         return None
 
     if action.startswith("loot"):
-        corpses = get_flag_dict(state, "corpses")
-        enemy_entries = corpses.get(room.room_id)
-        if not enemy_entries or not isinstance(enemy_entries, list):
-            return "Nothing here to loot."
-        unlooted = [entry for entry in enemy_entries if not entry.get("looted")]
-        if not unlooted:
-            return "You already searched the corpses."
-        target = action.replace("loot", "", 1).strip()
-        if target and target != "all" and not target.isdigit():
-            matches = [
-                entry
-                for entry in unlooted
-                if target in str(entry.get("name", "")).lower()
-            ]
-            if not matches:
-                return "No such corpse."
-            if len(matches) > 1:
-                return "Be more specific."
-            unlooted = matches
-        elif target.isdigit():
-            idx = int(target) - 1
-            if idx < 0 or idx >= len(unlooted):
-                return "That corpse does not exist."
-            unlooted = [unlooted[idx]]
-        elif not target and len(unlooted) > 1:
-            return "Multiple corpses here. Use 'loot <number>' or 'loot all'."
+        unlooted, error = select_corpse_targets(state, action.removeprefix("loot").strip())
+        if error:
+            return error
 
         total_gold = 0
         item_texts: List[str] = []
@@ -187,8 +201,10 @@ def _handle_combat_room_post_fight(
 
 
 def apply_exploration_action(state: GameState, action: str) -> str:
+    if not isinstance(action, str):
+        return "An action must be text."
     room = get_room(state.campaign_id, state.room_id)
-    action = action.lower()
+    action = action.strip().lower()
 
     if room.kind == "social":
         result = _handle_social_room(state, room, action)

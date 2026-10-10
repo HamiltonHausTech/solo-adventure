@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -11,10 +12,11 @@ from .rules import (
     apply_companion_action,
     apply_enemy_action,
     apply_exploration_action,
-    apply_player_action,
     apply_rest,
+    active_challenge,
     award_campaign_completion,
     clear_round_buffs,
+    challenge_blocks_movement,
     create_companion,
     create_player,
     drop_item,
@@ -22,9 +24,8 @@ from .rules import (
     equip_item,
     move_player,
     normalize_inventory,
-    regen_companion_mana,
-    regen_mana,
     reset_rest_streak,
+    resolve_challenge,
     scale_companion_for_level,
     start_room,
     sync_player_ac,
@@ -32,6 +33,14 @@ from .rules import (
     use_item,
 )
 from .state import GameState
+from .rules.combat import resolve_player_action
+from .rules.exploration import select_corpse_targets
+from .rules.spells import (
+    get_spell_definition,
+    get_spell_mana_cost,
+    is_healing_spell,
+    resolve_spell_name,
+)
 
 
 @dataclass(frozen=True)
@@ -54,7 +63,7 @@ class EngineEvent:
             "phase": self.phase,
             "message": self.message,
             "actor": self.actor,
-            "data": dict(self.data),
+            "data": deepcopy(self.data),
         }
 
 
@@ -71,7 +80,7 @@ class CommandResult:
             "accepted": self.accepted,
             "command": self.command,
             "events": [item.to_dict() for item in self.events],
-            "state": self.state,
+            "state": deepcopy(self.state),
             "error": self.error,
         }
 
@@ -126,6 +135,9 @@ class HeadlessEngine:
 
     def __init__(self, state: GameState):
         self.state = state
+        # Keep existing saved Clerics aligned with the revised level-one class kit.
+        if state.player.cls == "Cleric" and "Sacred Flame" not in state.player.learned_spells:
+            state.player.learned_spells.append("Sacred Flame")
 
     @classmethod
     def new(cls, **kwargs: Any) -> "HeadlessEngine":
@@ -148,6 +160,7 @@ class HeadlessEngine:
         player = Character.from_dict(carried.player.to_dict())
         player.hp = player.max_hp
         player.mana = player.max_mana
+        player.conditions.clear()
         inventory = list(carried.inventory)
         potion_count = sum(
             max(1, int(item.get("quantity", 1))) for item in inventory
@@ -180,6 +193,7 @@ class HeadlessEngine:
             inventory=inventory,
             equipment=dict(carried.equipment),
             adventurer_id=carried.adventurer_id,
+            adventurer_revision=carried.adventurer_revision,
         )
         normalize_inventory(state)
         sync_player_ac(state)
@@ -195,12 +209,13 @@ class HeadlessEngine:
         room = get_room(state.campaign_id, state.room_id)
         campaign = get_campaign(state.campaign_id)
         phase = self._phase()
-        return {
+        return deepcopy({
             "schema_version": 1,
             "campaign": {
                 "id": campaign.campaign_id,
                 "name": campaign.name,
                 "description": campaign.description,
+                "room_order": list(campaign.room_order),
             },
             "phase": phase,
             "turn": state.turn,
@@ -222,9 +237,11 @@ class HeadlessEngine:
             "equipment": dict(state.equipment),
             "flags": dict(state.flags),
             "available_actions": self.available_actions(),
+            "spellbook": self.spellbook(),
+            "challenge": active_challenge(state),
             "game_over": state.game_over,
             "save": state.to_dict(),
-        }
+        })
 
     def available_actions(self) -> List[Dict[str, Any]]:
         state = self.state
@@ -244,14 +261,7 @@ class HeadlessEngine:
             if state.player.cls == "Fighter":
                 actions.append({"id": "guard_companion", "label": f"Guard {state.companion.name}"})
             if state.player.learned_spells:
-                actions.append(
-                    {
-                        "id": "cast",
-                        "label": "Cast spell",
-                        "requires": ["spell", "target?"],
-                        "options": list(state.player.learned_spells),
-                    }
-                )
+                actions.append({"id": "spellbook", "label": "Open spellbook"})
             return actions + common
         actions = [
             {"id": "talk", "label": "Talk"},
@@ -259,6 +269,21 @@ class HeadlessEngine:
             {"id": "loot", "label": "Loot", "requires": ["target?"]},
             {"id": "rest", "label": "Rest"},
         ]
+        if state.player.learned_spells:
+            actions.append({"id": "spellbook", "label": "Open spellbook"})
+        challenge = active_challenge(state)
+        if challenge:
+            for option in challenge["options"]:
+                actions.append(
+                    {
+                        "id": "challenge",
+                        "label": option["label"],
+                        "target": option["id"],
+                        "description": option.get("description", "Challenge approach"),
+                        "disabled": not option["available"],
+                        "disabled_reason": option.get("reason"),
+                    }
+                )
         for alias, destination in get_exits(state.campaign_id, state.room_id).items():
             if alias == destination:
                 actions.append(
@@ -266,9 +291,50 @@ class HeadlessEngine:
                         "id": "move",
                         "label": f"Move to {get_room(state.campaign_id, destination).name}",
                         "target": destination,
+                        "disabled": bool(challenge and challenge["required"]),
+                        "disabled_reason": "Resolve the required challenge before moving." if challenge and challenge["required"] else None,
                     }
                 )
         return actions + common
+
+    def spellbook(self) -> List[Dict[str, Any]]:
+        """Return known spells with context-sensitive availability and targets."""
+        state = self.state
+        context = "combat" if state.in_combat else "exploration"
+        entries: List[Dict[str, Any]] = []
+        for spell_name in state.player.learned_spells:
+            definition = get_spell_definition(spell_name)
+            if not definition:
+                continue
+            targets: List[Dict[str, str]] = []
+            if definition.target_type == "enemy":
+                targets = [{"id": str(enemy_id + 1), "label": enemy.name} for enemy_id, enemy in enumerate(state.enemies) if enemy.hp > 0]
+            elif definition.target_type == "self":
+                targets = [{"id": "me", "label": state.player.name}]
+            elif definition.target_type == "ally":
+                targets = [{"id": "me", "label": state.player.name}]
+                if state.companion.hp > 0:
+                    targets.append({"id": state.companion.name, "label": state.companion.name})
+            elif definition.target_type == "wounded_ally":
+                if 0 < state.player.hp < state.player.max_hp:
+                    targets.append({"id": "me", "label": state.player.name})
+                if 0 < state.companion.hp < state.companion.max_hp:
+                    targets.append({"id": state.companion.name, "label": state.companion.name})
+
+            reason: Optional[str] = None
+            if context not in definition.contexts:
+                reason = "Combat only" if definition.contexts == ("combat",) else "Exploration only"
+            elif state.player.mana < definition.mana_cost:
+                reason = f"Requires {definition.mana_cost} mana"
+            elif not targets:
+                reason = "No valid targets"
+            elif spell_name == "Detect Magic" and state.flags.get(f"detect_magic:{state.room_id}"):
+                reason = "Already examined this location"
+            elif spell_name == "Guidance" and state.flags.get("guidance_active"):
+                reason = "Guidance is already active"
+
+            entries.append({**definition.to_dict(), "targets": targets, "available": reason is None, "reason": reason})
+        return entries
 
     def execute(
         self,
@@ -278,6 +344,11 @@ class HeadlessEngine:
         spell: Optional[str] = None,
         item: Optional[str] = None,
     ) -> CommandResult:
+        if not isinstance(command, str):
+            return self._rejected("", "A command must be text.")
+        for label, value in (("target", target), ("spell", spell), ("item", item)):
+            if value is not None and not isinstance(value, str):
+                return self._rejected(command, f"A {label} must be text.")
         normalized = command.strip().lower()
         if self.state.game_over:
             return self._rejected(normalized, "The campaign is already over.")
@@ -291,6 +362,8 @@ class HeadlessEngine:
                 return self._rejected(normalized, "You cannot leave during combat.")
             if not target:
                 return self._rejected(normalized, "A destination is required.")
+            if challenge_blocks_movement(self.state):
+                return self._rejected(normalized, "You must resolve the challenge before moving on.")
             ok, message = move_player(self.state, target.lower())
             if not ok:
                 return self._rejected(normalized, message)
@@ -303,6 +376,15 @@ class HeadlessEngine:
             reaction = rest_reaction(self.state)
             if reaction:
                 messages.append(reaction)
+        elif normalized == "challenge":
+            if self.state.in_combat:
+                return self._rejected(normalized, "There is no time for that during combat.")
+            if not target:
+                return self._rejected(normalized, "Choose an approach to the challenge.")
+            resolved, message = resolve_challenge(self.state, target)
+            if not resolved:
+                return self._rejected(normalized, message)
+            messages.append(message)
         elif normalized == "companion_talk":
             if self.state.in_combat:
                 return self._rejected(normalized, "There is no time for a conversation during combat.")
@@ -350,18 +432,62 @@ class HeadlessEngine:
             if not removed:
                 return self._rejected(normalized, message)
             messages.append(message)
+        elif normalized == "cast" and not self.state.in_combat:
+            resolved, error = resolve_spell_name(self.state.player.learned_spells, spell or "")
+            if error:
+                return self._rejected(normalized, error)
+            definition = get_spell_definition(resolved or "")
+            if not definition or "exploration" not in definition.contexts:
+                return self._rejected(normalized, "That spell cannot be cast outside combat.")
+            if self.state.player.mana < get_spell_mana_cost(resolved):
+                return self._rejected(normalized, "You are out of mana.")
+            if is_healing_spell(resolved):
+                outcome = resolve_player_action(self.state, "special", target, resolved)
+                if not outcome.accepted:
+                    return self._rejected(normalized, outcome.message)
+                messages.append(outcome.message)
+            elif resolved == "Detect Magic":
+                flag = f"detect_magic:{self.state.room_id}"
+                if self.state.flags.get(flag):
+                    return self._rejected(normalized, "You have already examined this location for magic.")
+                self.state.player.mana -= definition.mana_cost
+                self.state.flags[flag] = True
+                room = get_room(self.state.campaign_id, self.state.room_id)
+                messages.append(f"Arcane traces sharpen into view around {room.name}. Nothing magical here can surprise you now.")
+            elif resolved == "Guidance":
+                if self.state.flags.get("guidance_active"):
+                    return self._rejected(normalized, "Guidance is already active.")
+                self.state.player.mana -= definition.mana_cost
+                self.state.flags["guidance_active"] = True
+                messages.append("A quiet certainty settles over you. Your next social, search, or lock check gains +2.")
+            else:
+                return self._rejected(normalized, "That utility spell has no effect here.")
         elif self.state.in_combat:
             if normalized == "cast":
+                resolved, error = resolve_spell_name(self.state.player.learned_spells, spell or "")
+                if error:
+                    return self._rejected(normalized, error)
+                definition = get_spell_definition(resolved or "")
+                if not definition or "combat" not in definition.contexts:
+                    return self._rejected(normalized, "That spell cannot be cast during combat.")
+                spell = resolved
                 normalized = "special"
             if normalized not in {"attack", "defend", "special", "guard_companion"}:
                 return self._rejected(command, "That action is not available during combat.")
             if normalized == "guard_companion" and self.state.player.cls != "Fighter":
                 return self._rejected(command, "Only a fighter can guard a companion.")
-            messages.append(apply_player_action(self.state, normalized, target, spell))
+            outcome = resolve_player_action(self.state, normalized, target, spell)
+            if not outcome.accepted:
+                return self._rejected(command, outcome.message)
+            messages.append(outcome.message)
             messages.extend(self._resolve_other_combatants())
         else:
             if normalized not in {"talk", "search", "loot", "inspect", "open"}:
                 return self._rejected(normalized, "That action is not available here.")
+            if normalized == "loot" and get_room(self.state.campaign_id, self.state.room_id).kind == "combat":
+                _, error = select_corpse_targets(self.state, target)
+                if error:
+                    return self._rejected(command, error)
             action = normalized
             if target and normalized == "loot":
                 action = f"loot {target}"
@@ -386,7 +512,14 @@ class HeadlessEngine:
         )
 
     def _resolve_other_combatants(self) -> List[str]:
-        messages = [apply_companion_action(self.state)]
+        from .rules.conditions import resolve_condition_ticks
+
+        messages = resolve_condition_ticks(self.state)
+        if self.state.player.hp <= 0:
+            self.state.game_over = True
+            messages.append("You collapse as the poison takes its final toll.")
+            return messages
+        messages.append(apply_companion_action(self.state))
         messages.extend(apply_enemy_action(self.state))
         if 0 < self.state.companion.hp <= max(3, self.state.companion.max_hp // 4):
             messages.append(
@@ -402,8 +535,6 @@ class HeadlessEngine:
                 reaction = post_combat_reaction(self.state)
                 if reaction:
                     messages.append(reaction)
-        regen_mana(self.state, 1)
-        regen_companion_mana(self.state, 1)
         return messages
 
     def _award_completion_once(self, messages: List[str]) -> None:
@@ -448,6 +579,10 @@ class HeadlessEngine:
                 event_type = "damage_applied"
             if "heal" in lowered:
                 event_type = "healing_applied"
+            if "is poisoned" in lowered or "resists the venom" in lowered:
+                event_type = "condition_applied" if "is poisoned" in lowered else "condition_resisted"
+            if "poison courses" in lowered:
+                event_type = "condition_tick"
             if "xp +" in lowered or "campaign complete" in lowered:
                 event_type = "progression_awarded"
             if "loot" in lowered or "gold" in lowered or "find " in lowered:

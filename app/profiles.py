@@ -41,6 +41,7 @@ class MobProfile:
     loot: Dict[str, object] = field(default_factory=dict)
     ai: str = "focus_weakest"
     xp: int = 0
+    on_hit_condition: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -134,8 +135,8 @@ CLASS_PROFILES: Dict[str, ClassProfile] = {
         base_ac=14,
         attack_bonus=2,
         damage="1d6+1",
-        spells=["Cure Wounds"],
-        description="Divine healer and support caster.",
+        spells=["Cure Wounds", "Sacred Flame"],
+        description="Divine healer who can also strike foes with sacred magic.",
         hp_per_level=1,
     ),
 }
