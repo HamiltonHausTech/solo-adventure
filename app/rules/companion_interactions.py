@@ -18,6 +18,10 @@ MARA_ROOM_LINES = {
 
 def _remember(state: GameState, key: str, trust_delta: int = 0) -> bool:
     companion = state.companion
+    durable_key = f"relationship:{companion.name}:{key}"
+    if companion.hp <= 0 or state.flags.get(durable_key):
+        return False
+    state.flags[durable_key] = True
     if key in companion.memories:
         return False
     companion.memories.append(key)
@@ -40,6 +44,7 @@ def talk_to_companion(state: GameState) -> str:
         line = "I'm with you. Let's keep moving carefully."
     if first_time:
         companion.mood = "engaged"
+        state.flags[f"companion_conversation:{companion.name}:{state.room_id}"] = f"{companion.name}: {line}"
         return f'{companion.name}: “{line}” Trust +2.'
     return f'{companion.name}: “We have already taken the measure of this place. I have nothing to add yet.”'
 

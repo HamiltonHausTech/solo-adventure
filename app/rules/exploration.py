@@ -31,7 +31,8 @@ def start_room(state: GameState, room: Room) -> str:
         state.in_combat = True
         enemy_name = room.enemy_name or "enemies"
         return f"A fight breaks out with {enemy_name}."
-    return room.description
+    from ..journey import room_description
+    return room_description(state)
 
 
 def _handle_social_room(state: GameState, room: Room, action: str) -> Optional[str]:
@@ -45,10 +46,16 @@ def _handle_social_room(state: GameState, room: Room, action: str) -> Optional[s
     done_flag = cfg.get("done_flag", "social_done")
 
     if action in {"talk", "speak", "parley", "approach"}:
+        if state.flags.get(str(done_flag)) or (success_flag and state.flags.get(str(success_flag))):
+            from ..journey import conversation_recap
+            return conversation_recap(state, room)
         guidance = _guidance_bonus(state)
         stat_bonus = state.player.stats.get(stat_key, 0) + guidance
         success, roll, total = check(stat_bonus, dc)
         state.flags[str(done_flag)] = True
+        evidence = success_msg if success else fail_msg
+        if evidence:
+            state.flags[f"conversation:{room.room_id}"] = str(evidence).format(roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc)
         if success and success_flag:
             state.flags[str(success_flag)] = True
         if success and success_msg:
@@ -205,6 +212,15 @@ def apply_exploration_action(state: GameState, action: str) -> str:
         return "An action must be text."
     room = get_room(state.campaign_id, state.room_id)
     action = action.strip().lower()
+    if room.challenge_config and room.challenge_config.get("completion") and action in {"search", "open", "loot", "inspect"}:
+        from .challenges import active_challenge, resolve_challenge
+        challenge = active_challenge(state)
+        if not challenge:
+            return "The seal has already been restored."
+        option = next(o for o in challenge["options"] if o["available"])
+        return resolve_challenge(state, option["id"])[1]
+    if action in {"search", "inspect"} and room.kind != "loot":
+        state.flags[f"searched:{room.room_id}"] = True
 
     if room.kind == "social":
         result = _handle_social_room(state, room, action)

@@ -281,6 +281,8 @@ def parse_engine_action(action: str, engine: HeadlessEngine) -> tuple[str, dict]
     if use_payload is not None:
         item, target = use_payload
         return "use", {"item": item or None, "target": target}
+    if verb == "camp":
+        return "camp", ({"target": payload} if payload else {})
     if verb in {"equip", "drop"}:
         return verb, {"item": payload or None}
     if verb in {"unequip", "challenge", "attack", "special", "loot", "set_tactic"}:
@@ -369,7 +371,7 @@ def handle_action(state: GameState, llm: LLMClient | None, last_input: str) -> s
         raise SystemExit
     if action in {"help", "?"}:
         print(
-            "Try: talk, search, loot [number|all], move <destination>, rest [N], "
+            "Try: talk, search, loot [number|all], move <destination>, rest [N], camp, "
             "challenge <option>, attack [target], defend, special [target], guard_companion, "
             "cast <spell> [on <target>], spellbook, use potion [on <target>], "
             "gear, equip <item>, unequip <slot>, drop <item>, inventory, status, stats, "

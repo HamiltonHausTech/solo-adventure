@@ -140,8 +140,34 @@ The game auto-saves every turn to `game_state.json` in the project root. If a sa
 ## Character persistence
 Characters are saved to the `characters/` directory and can be reused across campaigns. When starting a new game, you can load an existing character (keeping their gold, inventory, and equipment) or create a new one. Progress is synced to your character roster whenever the game saves.
 
+## Adventure flow
+
+- `camp` takes no arguments and batches up to 100 existing recovery ticks, stopping
+  when every living party member is recovered. It never revives fallen actors.
+  Mana recovers each tick and HP every second consecutive tick, sharing the same
+  `rest_streak` as `rest`. The turn counter advances by the actual ticks, with one
+  summary/log and at most one relationship reaction. Full recovery, combat, and
+  completed games reject camp without changing state. `rest` remains available
+  for one tick (and legacy pending spell choices); camp does not prompt for choices.
+- Snapshots add `camp: {available, reason, recovery_turns, recovery}` where each
+  recovery entry is `{name, hp, mana}` with actual capped gains, and
+  `journey: {objective: {title, description}, journal: [{id, text}],
+  locations: [{id, name, statuses}]}`. Previews are read-only. Known locations are
+  visited rooms plus their adjacent exits, not the full campaign route. Existing
+  action IDs, targets, snapshot fields, and save format remain supported.
+- NPC conversations keep their first result, including useful fallback directions
+  on failure; exhausted Talk/Search/Loot actions explain why they are disabled.
+  Journal evidence, searched locations, and per-room relationship rewards persist
+  in save flags. Evicting a companion’s short memory does not reset those rewards.
+- Greyfen’s final seal offers reliable approaches through Nessa’s information,
+  living Eldrin with trust 60, or Wisdom 5 / Battle Resilience. An unaided Wisdom
+  check is always possible: failure still restores the seal at a cost of at most
+  3 HP, never killing the player. Legacy `search`, `inspect`, `open`, and `loot`
+  use the best available approach from the same resolver, with one-time completion
+  rewards and a saved ending explanation; they cannot bypass the challenge.
+
 ## Controls
-- Exploration: `talk`, `search`, `loot`, `move <destination>` (or `up`/`down`), `rest`, `use potion [on mara]`, `gear`, `inventory`, `stats`, `help`, `quit`
+- Exploration: `talk`, `search`, `loot`, `move <destination>` (or `up`/`down`), `rest`, `camp`, `use potion [on mara]`, `gear`, `inventory`, `stats`, `help`, `quit`
 - Combat: `attack [target]`, `defend`, `special [target]` (Wizard: Spark or Magic Missile), `use potion [on mara]`, `gear`, `inventory`, `help`, `quit`
 
 ## Notes

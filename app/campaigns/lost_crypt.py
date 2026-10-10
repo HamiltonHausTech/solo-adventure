@@ -32,6 +32,8 @@ ROOMS: Dict[str, Room] = {
             "stat": "WIS",
             "dc": 12,
             "success_flag": "keeper_warned",
+            "success_recap": "Aldric shares what he knows. 'The lower levels hold restless dead. Bring light and steel.'",
+            "fail_recap": "Aldric shrugs. 'Go if you must. I've said my piece.'",
             "success_msg": "Aldric shares what he knows (roll {roll} -> {total}). 'The lower levels hold restless dead. Bring light and steel.'",
             "fail_msg": "Aldric shrugs (roll {roll} -> {total}). 'Go if you must. I've said my piece.'",
             "done_flag": "social_done",
