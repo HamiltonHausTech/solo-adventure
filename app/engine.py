@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -11,7 +12,6 @@ from .rules import (
     apply_companion_action,
     apply_enemy_action,
     apply_exploration_action,
-    apply_player_action,
     apply_rest,
     active_challenge,
     award_campaign_completion,
@@ -33,6 +33,8 @@ from .rules import (
     use_item,
 )
 from .state import GameState
+from .rules.combat import resolve_player_action
+from .rules.exploration import select_corpse_targets
 from .rules.spells import (
     get_spell_definition,
     get_spell_mana_cost,
@@ -61,7 +63,7 @@ class EngineEvent:
             "phase": self.phase,
             "message": self.message,
             "actor": self.actor,
-            "data": dict(self.data),
+            "data": deepcopy(self.data),
         }
 
 
@@ -78,7 +80,7 @@ class CommandResult:
             "accepted": self.accepted,
             "command": self.command,
             "events": [item.to_dict() for item in self.events],
-            "state": self.state,
+            "state": deepcopy(self.state),
             "error": self.error,
         }
 
@@ -190,6 +192,7 @@ class HeadlessEngine:
             inventory=inventory,
             equipment=dict(carried.equipment),
             adventurer_id=carried.adventurer_id,
+            adventurer_revision=carried.adventurer_revision,
         )
         normalize_inventory(state)
         sync_player_ac(state)
@@ -205,7 +208,7 @@ class HeadlessEngine:
         room = get_room(state.campaign_id, state.room_id)
         campaign = get_campaign(state.campaign_id)
         phase = self._phase()
-        return {
+        return deepcopy({
             "schema_version": 1,
             "campaign": {
                 "id": campaign.campaign_id,
@@ -237,7 +240,7 @@ class HeadlessEngine:
             "challenge": active_challenge(state),
             "game_over": state.game_over,
             "save": state.to_dict(),
-        }
+        })
 
     def available_actions(self) -> List[Dict[str, Any]]:
         state = self.state
@@ -338,6 +341,11 @@ class HeadlessEngine:
         spell: Optional[str] = None,
         item: Optional[str] = None,
     ) -> CommandResult:
+        if not isinstance(command, str):
+            return self._rejected("", "A command must be text.")
+        for label, value in (("target", target), ("spell", spell), ("item", item)):
+            if value is not None and not isinstance(value, str):
+                return self._rejected(command, f"A {label} must be text.")
         normalized = command.strip().lower()
         if self.state.game_over:
             return self._rejected(normalized, "The campaign is already over.")
@@ -431,12 +439,10 @@ class HeadlessEngine:
             if self.state.player.mana < get_spell_mana_cost(resolved):
                 return self._rejected(normalized, "You are out of mana.")
             if is_healing_spell(resolved):
-                target_actor = self.state.companion if target and self.state.companion.name.lower() in target.lower() else self.state.player
-                if target_actor.hp <= 0:
-                    return self._rejected(normalized, f"{resolved} cannot revive a fallen ally.")
-                if target_actor.hp >= target_actor.max_hp:
-                    return self._rejected(normalized, f"{target_actor.name} is already at full health.")
-                messages.append(apply_player_action(self.state, "special", target, resolved))
+                outcome = resolve_player_action(self.state, "special", target, resolved)
+                if not outcome.accepted:
+                    return self._rejected(normalized, outcome.message)
+                messages.append(outcome.message)
             elif resolved == "Detect Magic":
                 flag = f"detect_magic:{self.state.room_id}"
                 if self.state.flags.get(flag):
@@ -467,11 +473,18 @@ class HeadlessEngine:
                 return self._rejected(command, "That action is not available during combat.")
             if normalized == "guard_companion" and self.state.player.cls != "Fighter":
                 return self._rejected(command, "Only a fighter can guard a companion.")
-            messages.append(apply_player_action(self.state, normalized, target, spell))
+            outcome = resolve_player_action(self.state, normalized, target, spell)
+            if not outcome.accepted:
+                return self._rejected(command, outcome.message)
+            messages.append(outcome.message)
             messages.extend(self._resolve_other_combatants())
         else:
             if normalized not in {"talk", "search", "loot", "inspect", "open"}:
                 return self._rejected(normalized, "That action is not available here.")
+            if normalized == "loot" and get_room(self.state.campaign_id, self.state.room_id).kind == "combat":
+                _, error = select_corpse_targets(self.state, target)
+                if error:
+                    return self._rejected(command, error)
             action = normalized
             if target and normalized == "loot":
                 action = f"loot {target}"

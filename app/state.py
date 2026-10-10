@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -39,7 +40,7 @@ class Character:
             "name": self.name,
             "race": self.race,
             "cls": self.cls,
-            "stats": self.stats,
+            "stats": dict(self.stats),
             "hp": self.hp,
             "max_hp": self.max_hp,
             "ac": self.ac,
@@ -96,7 +97,7 @@ class Character:
             gold=int(data.get("gold", 0)),
             xp=int(data.get("xp", 0)),
             level=level,
-            learned_spells=learned,
+            learned_spells=list(learned),
             unspent_attribute_points=max(
                 0,
                 int(data.get("unspent_attribute_points", (level - 1) * 2 if legacy_rewards else 0)),
@@ -253,6 +254,7 @@ class GameState:
     rest_streak: int = 0
     pending_level_choices: List[Dict[str, Any]] = field(default_factory=list)
     adventurer_id: Optional[str] = None
+    adventurer_revision: Optional[int] = None
 
     @property
     def companion(self) -> Companion:
@@ -260,7 +262,7 @@ class GameState:
         return self.companions[0]
 
     def to_dict(self) -> Dict:
-        return {
+        return deepcopy({
             "version": 1,
             "campaign_id": self.campaign_id,
             "player": self.player.to_dict(),
@@ -289,10 +291,12 @@ class GameState:
             "rest_streak": self.rest_streak,
             "pending_level_choices": list(self.pending_level_choices),
             "adventurer_id": self.adventurer_id,
-        }
+            "adventurer_revision": self.adventurer_revision,
+        })
 
     @staticmethod
     def from_dict(data: Dict) -> "GameState":
+        data = deepcopy(data)
         campaign_id = data.get("campaign_id", "ruined_watchtower")
         raw_inventory = data.get("inventory", [])
         inventory: List[Dict[str, Any]] = []
@@ -353,6 +357,7 @@ class GameState:
                 if isinstance(choice, dict) and choice.get("type") != "spell"
             ],
             adventurer_id=data.get("adventurer_id"),
+            adventurer_revision=(int(data["adventurer_revision"]) if data.get("adventurer_revision") is not None else None),
         )
         from .rules.inventory import normalize_inventory
 
