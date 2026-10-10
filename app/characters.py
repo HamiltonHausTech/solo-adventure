@@ -87,6 +87,7 @@ def load_character(
     # Restore full HP/mana for new campaign
     character.hp = character.max_hp
     character.mana = character.max_mana
+    character.conditions.clear()
 
     raw_inventory = data.get("inventory", [])
     inventory: List[Dict[str, Any]] = []

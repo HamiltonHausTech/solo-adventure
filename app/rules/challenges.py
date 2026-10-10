@@ -56,7 +56,8 @@ def resolve_challenge(state: GameState, option_id: str) -> Tuple[bool, str]:
     if not option.get("available"):
         return False, str(option.get("reason") or "That approach is unavailable.")
 
-    guidance = 2 if state.flags.pop("guidance_active", False) else 0
+    # Automatic approaches make no check and must preserve the next-roll bonus.
+    guidance = 2 if not option.get("automatic") and state.flags.pop("guidance_active", False) else 0
     stat = str(option.get("stat", "INT"))
     bonus = state.player.stats.get(stat, 0) + int(option.get("bonus", 0)) + guidance
     if option.get("automatic"):

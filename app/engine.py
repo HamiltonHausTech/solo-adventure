@@ -160,6 +160,7 @@ class HeadlessEngine:
         player = Character.from_dict(carried.player.to_dict())
         player.hp = player.max_hp
         player.mana = player.max_mana
+        player.conditions.clear()
         inventory = list(carried.inventory)
         potion_count = sum(
             max(1, int(item.get("quantity", 1))) for item in inventory
@@ -290,6 +291,8 @@ class HeadlessEngine:
                         "id": "move",
                         "label": f"Move to {get_room(state.campaign_id, destination).name}",
                         "target": destination,
+                        "disabled": bool(challenge and challenge["required"]),
+                        "disabled_reason": "Resolve the required challenge before moving." if challenge and challenge["required"] else None,
                     }
                 )
         return actions + common
