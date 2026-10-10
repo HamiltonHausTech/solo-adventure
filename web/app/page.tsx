@@ -763,7 +763,8 @@ export default function Home() {
     if (action.id === "move" && action.target) return command("move", { target: action.target });
     if (action.id === "challenge" && action.target) return command("challenge", { target: action.target });
     if (action.id === "loot") return command("loot", { target: hasLoot ? "all" : undefined });
-    if (["attack", "special"].includes(action.id)) return command(action.id, { target: "1" });
+    // Attack and Special share the engine default: the lowest-HP living enemy.
+    // Enemy IDs retain their original slots, so "1" may already be defeated.
     return command(action.id);
   };
 

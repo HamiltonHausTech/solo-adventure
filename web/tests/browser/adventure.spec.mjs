@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { seedProgression } from '../progression-fixture.mjs';
+import { seedProgression, seedCombatAfterFirstDefeat } from '../progression-fixture.mjs';
 import { randomUUID } from 'node:crypto';
 const api = 'http://127.0.0.1:18800';
 async function create(request, name) {
@@ -40,6 +40,39 @@ test('real Python API: create, equip, combat, reload and resume exact persisted 
   expect(persisted.state.player.hp).toBe(outcome.state.player.hp);
   expect(errors).toEqual([]);
 });
+
+for (const action of ['attack', 'special', 'cast']) {
+  test(`real Python API: ${action} targets living enemies after enemy 1 dies`, async ({ page, request }) => {
+    const { id, name } = seedCombatAfterFirstDefeat();
+    const before = await (await request.get(`${api}/api/games/${id}`)).json();
+    expect(before.state.phase).toBe('combat');
+    expect(before.state.enemies.map(enemy => enemy.id)).toEqual([2]);
+    await page.goto('/');
+    await page.locator('.saved-adventures').getByRole('button', { name: new RegExp(name) }).click();
+    const response = page.waitForResponse(response => response.url() === `${api}/api/games/${id}/commands`);
+    if (action === 'cast') {
+      await page.getByRole('button', { name: 'Open spellbook', exact: false }).click();
+      await page.locator('.spell-list article').filter({ has: page.getByRole('heading', { name: 'Spark', exact: true }) }).getByRole('button', { name: /^Cast on / }).click();
+    } else {
+      await page.locator('.action-grid').getByRole('button', { name: new RegExp(action, 'i') }).click();
+    }
+    const completed = await response;
+    expect(completed.ok()).toBeTruthy();
+    expect(completed.request().postDataJSON()).toEqual(action === 'cast'
+      ? { command: 'cast', spell: 'Spark', target: '2' }
+      : { command: action });
+    const result = await completed.json();
+    expect(result.accepted).toBe(true);
+    expect(result.state.turn).toBe(before.state.turn + 1);
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.state.enemies.map(enemy => enemy.id)).toEqual([2]);
+    await expect(page.locator('.turn-counter b')).toHaveText(String(result.state.turn).padStart(2, '0'));
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    const persisted = await (await request.get(`${api}/api/games/${id}`)).json();
+    expect(persisted.state.turn).toBe(result.state.turn);
+    expect(persisted.state.enemies).toEqual(result.state.enemies);
+  });
+}
 
 test('real Python API: progression persists and makes the older session read-only', async ({ page, request }) => {
   const name = seedProgression();
