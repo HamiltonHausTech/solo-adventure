@@ -104,6 +104,17 @@ type EngineState = {
   available_actions: AvailableAction[];
   spellbook: SpellbookEntry[];
   challenge?: Challenge | null;
+  journey?: {
+    objective: { title: string; description: string };
+    journal: Array<{ id: string; text: string }>;
+    locations: Array<{ id: string; name: string; statuses: string[] }>;
+  };
+  camp?: {
+    available: boolean;
+    reason: string | null;
+    recovery_turns: number;
+    recovery: Array<{ name: string; hp: number; mana: number }>;
+  };
   game_over: boolean;
   save: { visited: string[] };
 };
@@ -317,6 +328,7 @@ export default function Home() {
   const [shopTab, setShopTab] = useState<ShopTab>("weapons");
   const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
   const [spellbookOpen, setSpellbookOpen] = useState(false);
+  const [campOpen, setCampOpen] = useState(false);
 
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [selecting, setSelecting] = useState(false);
@@ -328,7 +340,9 @@ export default function Home() {
     void audioContext.current?.close();
     window.speechSynthesis?.cancel();
   }, []);
-  useDialogFocus(shopOpen || spellbookOpen || Boolean(game && showSetup), () => {
+  useDialogFocus(shopOpen || spellbookOpen || campOpen || Boolean(game && showSetup), () => {
+    if (campOpen && mutationPending.current) return;
+    setCampOpen(false);
     setShopOpen(false);
     setPendingPurchase(null);
     setSpellbookOpen(false);
@@ -574,6 +588,7 @@ export default function Home() {
     setPendingPurchase(null);
     setSpellbookOpen(false);
     setGame(null);
+    setCampOpen(false);
     setShowSetup(true);
     setError(null);
   }
@@ -613,6 +628,13 @@ export default function Home() {
       mutationPending.current = false;
       setBusy(false);
     }
+  }
+
+  async function confirmCamp() {
+    if (busy || mutationPending.current || !game?.camp?.available) return;
+    await command("camp");
+    // Close even on an uncertain response: never retry a potentially committed camp.
+    setCampOpen(false);
   }
 
   if (!game && !showSetup) {
@@ -746,19 +768,22 @@ export default function Home() {
     ? companion.name
     : "me";
   const lastEvent = events[events.length - 1];
-  const visited = game.save.visited || [];
+  const locations = game.journey?.locations || [{ id: game.room.id, name: game.room.name, statuses: ["current"] }];
   const corpses = game.flags.corpses as Record<string, Array<{ looted?: boolean }>> | undefined;
   const hasLoot = Boolean(corpses?.[game.room.id]?.some((corpse) => !corpse.looted));
-  const available = game.available_actions.filter((action) => !action.informational && !["use", "companion_advice"].includes(action.id));
-  const suggestion = game.phase === "combat"
+  const available = game.available_actions.filter((action) => !action.informational && !["use", "companion_advice"].includes(action.id)
+    && !(game.challenge && game.room.kind === "loot" && ["search", "inspect", "open", "loot"].includes(action.id)));
+  const suggestion = game.journey?.objective.description || (game.phase === "combat"
     ? game.player.hp <= 5 && potions ? "You're bleeding. Drink the potion—I can hold them." : "Keep your guard up. We finish this together."
     : game.room.id === "courtyard" && !game.flags.social_done
       ? "That scout knows this place. Words may save us blood."
       : game.room.id === "spire"
         ? "There. The chest. Mind the lock—it looks stubborn."
-        : "Listen first. Old stone has a way of warning you.";
+        : "Listen first. Old stone has a way of warning you.");
 
   const runAction = (action: AvailableAction) => {
+    if (busy || mutationPending.current) return;
+    if (action.id === "camp") { if (game.camp?.available) setCampOpen(true); return; }
     if (action.id === "spellbook") { setSpellbookOpen(true); return; }
     if (action.id === "move" && action.target) return command("move", { target: action.target });
     if (action.id === "challenge" && action.target) return command("challenge", { target: action.target });
@@ -785,15 +810,24 @@ export default function Home() {
 
       <section className="campaign-bar">
         <div><span className="eyebrow">Campaign 01</span><strong>{game.campaign.name}</strong></div>
-        <div className="progress-track" aria-label={`${visited.length} of ${game.campaign.room_order.length} locations discovered`}>
-          {game.campaign.room_order.map((id, index) => (
-            <span key={id} className={visited.includes(id) ? "visited" : ""}><i>{index + 1}</i>{id[0].toUpperCase() + id.slice(1)}</span>
-          ))}
-        </div>
+        <div className="journey-position">{game.room.name}<small>{locations.length} known locations</small></div>
         <div className="turn-counter"><span>Turn</span><b>{String(game.turn).padStart(2, "0")}</b></div>
       </section>
 
       {error && <div className="error-banner" role="alert">{error} <button disabled={busy} onClick={returnToRoster}>Return to adventurer roster</button></div>}
+
+      {game.journey && <section className="journey-panel" aria-label="Current objective">
+        <span className="section-label">Current objective</span>
+        <h2>{game.journey.objective.title}</h2>
+        <p>{game.journey.objective.description}</p>
+        <details>
+          <summary>Journal and known locations</summary>
+          <div className="journey-details">
+            <div><h3>Journal</h3><ul aria-label="Journal">{game.journey.journal.map((entry) => <li key={entry.id}>{entry.text}</li>)}</ul>{!game.journey.journal.length && <p>No discoveries recorded yet.</p>}</div>
+            <div><h3>Known locations</h3><ul aria-label="Known locations">{locations.map((location) => <li key={location.id} aria-current={location.id === game.room.id ? "location" : undefined}><b>{location.name}</b><small>{location.statuses.join(" · ")}</small></li>)}</ul></div>
+          </div>
+        </details>
+      </section>}
 
       <section className="play-grid">
         <aside className="party-panel">
@@ -878,13 +912,15 @@ export default function Home() {
               ) : (
                 <>
                   {available.map((action, index) => (
-                    <button key={`${action.id}-${action.spell || ""}-${action.target || index}`} className={index === 0 ? "primary-action" : ""} onClick={() => runAction(action)} disabled={busy || action.disabled || (action.id === "loot" && !hasLoot && game.room.kind !== "passage") || (action.id === "cast" && (game.player.mana || 0) < (action.mana_cost || 0))} title={action.disabled_reason || undefined}>
+                    <button key={`${action.id}-${action.spell || ""}-${action.target || index}`} className={index === 0 ? "primary-action" : ""} onClick={() => runAction(action)} disabled={busy || action.disabled || (action.id === "camp" && !game.camp?.available) || (action.id === "loot" && !hasLoot && game.room.kind !== "passage") || (action.id === "cast" && (game.player.mana || 0) < (action.mana_cost || 0))} title={action.disabled_reason || undefined}>
                       <span>{action.id === "attack" ? "⚔" : action.id === "defend" ? "◇" : action.id === "move" ? "→" : action.id === "rest" ? "☾" : action.id === "challenge" ? "⌘" : action.id === "cast" ? "✦" : "◌"}</span>
                       <b>{action.id === "loot" && hasLoot ? "Loot all" : action.label}</b>
                       <small>{action.disabled_reason || action.description || (action.id === "move" && action.target ? `Travel to ${action.target}` : action.id === "attack" ? game.player.damage : action.id === "cast" ? `${action.mana_cost} mana` : "Engine action")}</small>
+                      {action.id === "move" && <small className="location-status">{locations.find((location) => location.id === action.target)?.statuses.join(" · ")}</small>}
+                      {action.id === "camp" && game.camp?.reason && !action.disabled_reason && <small>{game.camp.reason}</small>}
                     </button>
                   ))}
-                  {game.room.kind === "loot" && <button className="primary-action" onClick={() => command("open")} disabled={busy}><span>⌑</span><b>Open the chest</b><small>Dexterity check</small></button>}
+                  {game.room.kind === "loot" && !game.challenge && !available.some((action) => action.id === "open") && <button className="primary-action" onClick={() => command("open")} disabled={busy}><span>⌑</span><b>Open the chest</b><small>Dexterity check</small></button>}
                   <button onClick={() => command("use", { item: "healing potion", target: "me" })} disabled={busy || !potions || !playerWounded}><span>✦</span><b>Heal {game.player.name}</b><small>{potions} potions remaining</small></button>
                   <button onClick={() => command("use", { item: "healing potion", target: companion.name })} disabled={busy || !potions || !companionWounded}><span>✦</span><b>{companion.hp <= 0 ? "Revive" : "Heal"} {companion.name}</b><small>{potions} potions remaining</small></button>
                 </>
@@ -906,6 +942,15 @@ export default function Home() {
           <div className="last-roll"><span>Latest event</span><p>{lastEvent?.type.replaceAll("_", " ")}</p></div>
         </aside>
       </section>
+      {campOpen && game.camp && <div className="setup-overlay">
+        <section className="setup-confirm camp-dialog" role="dialog" aria-modal="true" aria-labelledby="camp-title" aria-describedby="camp-preview" aria-busy={busy}>
+          <span className="eyebrow">Rest together</span>
+          <h2 id="camp-title">Make camp</h2>
+          <p id="camp-preview">Recover over {game.camp.recovery_turns} {game.camp.recovery_turns === 1 ? "turn" : "turns"}. The camp ends as soon as recovery is complete, up to 100 turns.</p>
+          <ul aria-label="Expected recovery">{game.camp.recovery.map((actor, index) => <li key={`${actor.name}-${index}`}><b>{actor.name}</b><span>+{actor.hp} HP · +{actor.mana} mana</span></li>)}</ul>
+          <div><button disabled={busy} onClick={() => setCampOpen(false)}>Cancel</button><button className="primary-confirm" disabled={busy || !game.camp.available} onClick={confirmCamp}>{busy ? "Making camp…" : "Confirm camp"}</button></div>
+        </section>
+      </div>}
       {spellbookOpen && (
         <div className="spellbook-backdrop" role="dialog" aria-modal="true" aria-label="Spellbook" onClick={() => setSpellbookOpen(false)}>
           <section className="spellbook-dialog" onClick={(event) => event.stopPropagation()}>

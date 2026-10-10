@@ -15,6 +15,7 @@ export function useDialogFocus(open: boolean, onClose: () => void) {
       if (event.key === "Escape") { event.preventDefault(); close(); }
       if (event.key !== "Tab") return;
       const items = focusable();
+      if (!items.length) { event.preventDefault(); dialog!.focus(); return; }
       const first = items[0] ?? dialog!;
       const last = items.at(-1) ?? dialog!;
       if (event.shiftKey && (document.activeElement === first || !dialog!.contains(document.activeElement))) {
