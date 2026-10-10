@@ -32,6 +32,7 @@ class Character:
     chosen_upgrades: List[str] = field(default_factory=list)
     campaign_completions: Dict[str, int] = field(default_factory=dict)
     discovered_unique_items: List[str] = field(default_factory=list)
+    conditions: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -58,6 +59,7 @@ class Character:
             "chosen_upgrades": list(self.chosen_upgrades),
             "campaign_completions": dict(self.campaign_completions),
             "discovered_unique_items": list(self.discovered_unique_items),
+            "conditions": dict(self.conditions),
         }
 
     @staticmethod
@@ -109,6 +111,7 @@ class Character:
                 for key, value in dict(data.get("campaign_completions", {})).items()
             },
             discovered_unique_items=[str(item) for item in data.get("discovered_unique_items", [])],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -120,6 +123,7 @@ class Mob:
     ac: int
     attack_bonus: int
     damage: str
+    conditions: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -129,6 +133,7 @@ class Mob:
             "ac": self.ac,
             "attack_bonus": self.attack_bonus,
             "damage": self.damage,
+            "conditions": dict(self.conditions),
         }
 
     @classmethod
@@ -140,6 +145,7 @@ class Mob:
             ac=int(data["ac"]),
             attack_bonus=int(data["attack_bonus"]),
             damage=data["damage"],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -183,6 +189,7 @@ class Companion(Mob):
             mood=str(data.get("mood", "steady")),
             tactic=str(data.get("tactic", "balanced")),
             memories=list(data.get("memories", []))[-20:],
+            conditions={str(key): max(0, int(value)) for key, value in dict(data.get("conditions", {})).items()},
         )
 
 
@@ -205,6 +212,7 @@ class Enemy(Mob):
             ac=mob.ac,
             attack_bonus=mob.attack_bonus,
             damage=mob.damage,
+            conditions=dict(mob.conditions),
             asleep=bool(data.get("asleep", False)),
         )
 

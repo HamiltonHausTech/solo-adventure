@@ -8,6 +8,7 @@ from ..content import get_campaign, get_mob_profile
 from ..state import Enemy, GameState
 
 from .dice import roll_die, roll_dice
+from .conditions import attempt_poison
 from .flags import get_flag_dict, get_flag_list, next_corpse_id
 from .spells import (
     SPELL_DAMAGE,
@@ -172,7 +173,8 @@ def apply_player_action(
             damage_expr, _ = SPELL_DAMAGE[spell_name]
             state.player.mana -= mana_cost
             spell_mod = state.player.stats.get("WIS", 0) if state.player.cls == "Cleric" else state.player.stats.get("INT", 0)
-            attack_bonus = state.player.attack_bonus + spell_mod + (1 if state.player_bless_active else 0)
+            prepared_bonus = int(state.flags.pop("prepared_strike", 0))
+            attack_bonus = state.player.attack_bonus + spell_mod + (1 if state.player_bless_active else 0) + prepared_bonus
             hit, roll, total = _attack_roll(
                 attacker_bonus=attack_bonus,
                 target_ac=target_enemy.ac,
@@ -194,7 +196,8 @@ def apply_player_action(
     special_bonus = 0
     from .inventory import equipment_attack_bonus, equipped_damage
 
-    attack_bonus = state.player.attack_bonus + equipment_attack_bonus(state) + (1 if state.player_bless_active else 0)
+    prepared_bonus = int(state.flags.pop("prepared_strike", 0))
+    attack_bonus = state.player.attack_bonus + equipment_attack_bonus(state) + (1 if state.player_bless_active else 0) + prepared_bonus
     damage_expr = equipped_damage(state)
     flavor = ""
 
@@ -339,6 +342,15 @@ def apply_enemy_action(state: GameState) -> List[str]:
                 results.append(
                     f"{enemy.name} strikes {state.player.name} (roll {roll} -> {total}) for {detail} damage."
                 )
+                condition = getattr(profile, "on_hit_condition", {})
+                if condition.get("id") == "poisoned":
+                    result = attempt_poison(
+                        state.player,
+                        dc=int(condition.get("dc", 12)),
+                        duration=int(condition.get("duration", 2)),
+                    )
+                    if result:
+                        results.append(result)
             else:
                 results.append(
                     f"{enemy.name} misses {state.player.name} (roll {roll} -> {total})."
@@ -357,6 +369,15 @@ def apply_enemy_action(state: GameState) -> List[str]:
             results.append(
                 f"{enemy.name} lashes at {companion.name} (roll {roll} -> {total}) for {detail} damage."
             )
+            condition = getattr(profile, "on_hit_condition", {})
+            if condition.get("id") == "poisoned":
+                result = attempt_poison(
+                    companion,
+                    dc=int(condition.get("dc", 12)),
+                    duration=int(condition.get("duration", 2)),
+                )
+                if result:
+                    results.append(result)
         else:
             results.append(f"{enemy.name} misses {companion.name} (roll {roll} -> {total}).")
     return results
@@ -369,6 +390,8 @@ def end_combat_if_needed(state: GameState) -> Optional[str]:
         return None
     if all(enemy.hp <= 0 for enemy in state.enemies):
         state.in_combat = False
+        state.player.conditions.pop("poisoned", None)
+        state.companion.conditions.pop("poisoned", None)
         defeated_rooms = get_flag_list(state, "defeated_rooms")
         if state.room_id not in defeated_rooms:
             defeated_rooms.append(state.room_id)

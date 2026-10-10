@@ -29,6 +29,7 @@ type Actor = {
   max_mana?: number;
   xp?: number;
   level?: number;
+  conditions?: Record<string, number>;
 };
 
 type Item = {
@@ -47,15 +48,39 @@ type Item = {
 type AvailableAction = {
   id: string;
   label: string;
+  spell?: string;
   target?: string;
+  mana_cost?: number;
   requires?: string[];
   options?: string[];
   informational?: boolean;
+  description?: string;
+  disabled?: boolean;
+  disabled_reason?: string | null;
+};
+
+type Challenge = {
+  title: string;
+  prompt: string;
+  required: boolean;
+  options: Array<{ id: string; label: string; description?: string; available: boolean; reason?: string | null }>;
+};
+
+type SpellbookEntry = {
+  name: string;
+  category: string;
+  mana_cost: number;
+  contexts: string[];
+  target_type: string;
+  description: string;
+  targets: Array<{ id: string; label: string }>;
+  available: boolean;
+  reason?: string | null;
 };
 
 type EngineState = {
   schema_version: number;
-  campaign: { id: string; name: string; description: string };
+  campaign: { id: string; name: string; description: string; room_order: string[] };
   phase: "exploration" | "combat" | "victory" | "defeat";
   turn: number;
   room: {
@@ -74,6 +99,8 @@ type EngineState = {
   equipment: Record<string, Item | null>;
   flags: Record<string, unknown>;
   available_actions: AvailableAction[];
+  spellbook: SpellbookEntry[];
+  challenge?: Challenge | null;
   game_over: boolean;
   save: { visited: string[] };
 };
@@ -203,7 +230,6 @@ const ROOM_KICKERS: Record<string, string> = {
   spire: "Open to the storm",
 };
 
-const ROOM_ORDER = ["courtyard", "cellar", "barracks", "spire"];
 const ATTRIBUTE_HELP: Record<string, string> = {
   STR: "Strength checks",
   DEX: "Agility and lock checks",
@@ -246,6 +272,7 @@ function itemComparison(item: Item, equipped: Item | null | undefined) {
 }
 
 function eventIcon(type: string) {
+  if (type.includes("condition")) return "☠";
   if (type.includes("damage")) return "⚔";
   if (type.includes("roll")) return "20";
   if (type.includes("loot") || type.includes("progression")) return "✦";
@@ -255,6 +282,7 @@ function eventIcon(type: string) {
 }
 
 function eventClass(type: string) {
+  if (type.includes("condition")) return "damage";
   if (type.includes("damage")) return "damage";
   if (type.includes("roll")) return "roll";
   if (type.includes("loot") || type.includes("progression")) return "loot";
@@ -281,6 +309,7 @@ export default function Home() {
   const [shopOpen, setShopOpen] = useState(false);
   const [shopTab, setShopTab] = useState<ShopTab>("weapons");
   const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
+  const [spellbookOpen, setSpellbookOpen] = useState(false);
 
   const apiBase = "http://127.0.0.1:8000";
 
@@ -679,9 +708,10 @@ export default function Home() {
         : "Listen first. Old stone has a way of warning you.";
 
   const runAction = (action: AvailableAction) => {
+    if (action.id === "spellbook") { setSpellbookOpen(true); return; }
     if (action.id === "move" && action.target) return command("move", { target: action.target });
+    if (action.id === "challenge" && action.target) return command("challenge", { target: action.target });
     if (action.id === "loot") return command("loot", { target: hasLoot ? "all" : undefined });
-    if (action.id === "cast" && action.options?.length) return command("cast", { spell: action.options[0], target: "1" });
     if (["attack", "special"].includes(action.id)) return command(action.id, { target: "1" });
     return command(action.id);
   };
@@ -703,8 +733,8 @@ export default function Home() {
 
       <section className="campaign-bar">
         <div><span className="eyebrow">Campaign 01</span><strong>{game.campaign.name}</strong></div>
-        <div className="progress-track" aria-label={`${visited.length} of 4 locations discovered`}>
-          {ROOM_ORDER.map((id, index) => (
+        <div className="progress-track" aria-label={`${visited.length} of ${game.campaign.room_order.length} locations discovered`}>
+          {game.campaign.room_order.map((id, index) => (
             <span key={id} className={visited.includes(id) ? "visited" : ""}><i>{index + 1}</i>{id[0].toUpperCase() + id.slice(1)}</span>
           ))}
         </div>
@@ -721,6 +751,7 @@ export default function Home() {
             <div className="character-info"><div><strong>{game.player.name}</strong><span>{game.player.race} {game.player.cls} · Lv {game.player.level}</span></div><b className="ac">AC {game.player.ac}</b></div>
             <div className="health-label"><span>Health</span><b>{game.player.hp} / {game.player.max_hp}</b></div>
             <div className="health-track"><i style={{ width: meter(game.player.hp, game.player.max_hp) }} /></div>
+            {Object.entries(game.player.conditions || {}).map(([condition, rounds]) => <div className={`condition-badge ${condition}`} key={condition}><b>{condition}</b><span>{rounds} round{rounds === 1 ? "" : "s"}</span></div>)}
             {Boolean(game.player.max_mana) && <><div className="health-label"><span>Mana</span><b>{game.player.mana} / {game.player.max_mana}</b></div><div className="health-track mana"><i style={{ width: meter(game.player.mana || 0, game.player.max_mana || 1) }} /></div></>}
           </article>
           <article className={`character-card compact ${companion.hp > 0 && companion.hp <= Math.max(3, Math.floor(companion.max_hp / 4)) ? "critical" : ""}`}>
@@ -728,6 +759,7 @@ export default function Home() {
             <div className="character-info"><div><strong>{companion.name}</strong><span>{activeCompanionProfile?.role || "Companion"} · {companion.tactic || "balanced"} tactic</span></div><b className="ac">AC {companion.ac}</b></div>
             <div className="health-label"><span>Health</span><b>{companion.hp} / {companion.max_hp}</b></div>
             <div className="health-track companion"><i style={{ width: meter(companion.hp, companion.max_hp) }} /></div>
+            {Object.entries(companion.conditions || {}).map(([condition, rounds]) => <div className={`condition-badge ${condition}`} key={condition}><b>{condition}</b><span>{rounds} round{rounds === 1 ? "" : "s"}</span></div>)}
             <div className="relationship-row"><span>Trust {companion.trust ?? 50}</span><span>{companion.mood || "steady"}</span></div>
             {companion.hp > 0 && companion.hp <= Math.max(3, Math.floor(companion.max_hp / 4)) && <div className="critical-warning">Critical · protect or heal {companion.name}</div>}
           </article>
@@ -777,7 +809,7 @@ export default function Home() {
               {game.enemies.map((enemy) => (
                 <article key={enemy.id}>
                   <div className="enemy-token">!</div>
-                  <div><strong>{enemy.name}</strong><span>AC {enemy.ac}</span></div>
+                  <div><strong>{enemy.name}</strong><span>AC {enemy.ac}</span>{Object.entries(enemy.conditions || {}).map(([condition, rounds]) => <em className={`enemy-condition ${condition}`} key={condition}>{condition} · {rounds}</em>)}</div>
                   <div className="enemy-health"><i style={{ width: meter(enemy.hp, enemy.max_hp) }} /></div>
                   <b>{enemy.hp} HP</b>
                 </article>
@@ -786,6 +818,7 @@ export default function Home() {
           )}
 
           <div className="action-area">
+            {game.challenge && <div className="challenge-callout"><span>{game.challenge.required ? "Path challenge" : "Optional opportunity"}</span><h2>{game.challenge.title}</h2><p>{game.challenge.prompt}</p></div>}
             <div className="action-heading"><span className="section-label">{game.phase === "combat" ? "Choose your move" : game.game_over ? "Campaign resolved" : "What do you do?"}</span><small>{busy ? "Resolving…" : "Resolved by Python rules"}</small></div>
             <div className="action-grid">
               {game.game_over ? (
@@ -793,10 +826,10 @@ export default function Home() {
               ) : (
                 <>
                   {available.map((action, index) => (
-                    <button key={`${action.id}-${action.target || index}`} className={index === 0 ? "primary-action" : ""} onClick={() => runAction(action)} disabled={busy || (action.id === "loot" && !hasLoot && game.room.kind !== "passage")}>
-                      <span>{action.id === "attack" ? "⚔" : action.id === "defend" ? "◇" : action.id === "move" ? "→" : action.id === "rest" ? "☾" : action.id === "cast" ? "✦" : "◌"}</span>
+                    <button key={`${action.id}-${action.spell || ""}-${action.target || index}`} className={index === 0 ? "primary-action" : ""} onClick={() => runAction(action)} disabled={busy || action.disabled || (action.id === "loot" && !hasLoot && game.room.kind !== "passage") || (action.id === "cast" && (game.player.mana || 0) < (action.mana_cost || 0))} title={action.disabled_reason || undefined}>
+                      <span>{action.id === "attack" ? "⚔" : action.id === "defend" ? "◇" : action.id === "move" ? "→" : action.id === "rest" ? "☾" : action.id === "challenge" ? "⌘" : action.id === "cast" ? "✦" : "◌"}</span>
                       <b>{action.id === "loot" && hasLoot ? "Loot all" : action.label}</b>
-                      <small>{action.target ? `Travel to ${action.target}` : action.id === "attack" ? game.player.damage : action.id === "cast" ? action.options?.join(", ") : "Engine action"}</small>
+                      <small>{action.disabled_reason || action.description || (action.id === "move" && action.target ? `Travel to ${action.target}` : action.id === "attack" ? game.player.damage : action.id === "cast" ? `${action.mana_cost} mana` : "Engine action")}</small>
                     </button>
                   ))}
                   {game.room.kind === "loot" && <button className="primary-action" onClick={() => command("open")} disabled={busy}><span>⌑</span><b>Open the chest</b><small>Dexterity check</small></button>}
@@ -821,6 +854,30 @@ export default function Home() {
           <div className="last-roll"><span>Latest event</span><p>{lastEvent?.type.replaceAll("_", " ")}</p></div>
         </aside>
       </section>
+      {spellbookOpen && (
+        <div className="spellbook-backdrop" role="dialog" aria-modal="true" aria-label="Spellbook" onClick={() => setSpellbookOpen(false)}>
+          <section className="spellbook-dialog" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div><span className="eyebrow">Known magic</span><h2>{game.player.name}&apos;s spellbook</h2></div>
+              <div className="spellbook-mana"><span>Mana</span><b>{game.player.mana} / {game.player.max_mana}</b></div>
+              <button className="spellbook-close" onClick={() => setSpellbookOpen(false)} aria-label="Close spellbook">×</button>
+            </header>
+            <div className="spell-list">
+              {game.spellbook.map((spell) => (
+                <article key={spell.name} className={!spell.available ? "unavailable" : ""}>
+                  <div className="spell-heading"><span className={`spell-rune ${spell.category}`}>✦</span><div><small>{spell.category} · {spell.contexts.join(" / ")}</small><h3>{spell.name}</h3></div><b>{spell.mana_cost} mana</b></div>
+                  <p>{spell.description}</p>
+                  {spell.available ? (
+                    <div className="spell-targets">
+                      {spell.targets.map((target) => <button key={target.id} disabled={busy} onClick={() => { setSpellbookOpen(false); command("cast", { spell: spell.name, target: target.id }); }}>Cast on {target.label}</button>)}
+                    </div>
+                  ) : <div className="spell-reason">{spell.reason}</div>}
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
       {showSetup && (
         <div className="setup-overlay" role="dialog" aria-modal="true" aria-label="Create a new character">
           <div className="setup-confirm">

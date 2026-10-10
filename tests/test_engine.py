@@ -17,6 +17,160 @@ import app.web_api as web_api
 
 
 class HeadlessEngineTests(unittest.TestCase):
+    def test_bog_hound_hit_can_poison_player(self) -> None:
+        from app.rules import apply_enemy_action
+        from app.rules.exploration import start_room
+        from app.content import get_room
+
+        engine = HeadlessEngine.new(campaign_id="embers_of_greyfen", companion_id="eldrin")
+        engine.state.room_id = "marsh_path"
+        start_room(engine.state, get_room("embers_of_greyfen", "marsh_path"))
+        engine.state.companion.hp = 0
+        with patch("app.rules.combat.roll_die", side_effect=[20, 20]), patch(
+            "app.rules.conditions.roll_die", return_value=1
+        ):
+            messages = apply_enemy_action(engine.state)
+        self.assertEqual(engine.state.player.conditions["poisoned"], 2)
+        self.assertTrue(any("is poisoned" in message for message in messages))
+
+    def test_poison_ticks_and_expires_after_two_combat_turns(self) -> None:
+        from app.rules.conditions import resolve_condition_ticks
+
+        engine = HeadlessEngine.new()
+        engine.state.player.conditions["poisoned"] = 2
+        hp = engine.state.player.hp
+        first = resolve_condition_ticks(engine.state)
+        self.assertEqual(engine.state.player.hp, hp - 1)
+        self.assertEqual(engine.state.player.conditions["poisoned"], 1)
+        second = resolve_condition_ticks(engine.state)
+        self.assertEqual(engine.state.player.hp, hp - 2)
+        self.assertNotIn("poisoned", engine.state.player.conditions)
+        self.assertIn("then fades", second[0])
+        self.assertIn("remaining", first[0])
+
+    def test_conditions_survive_save_restore(self) -> None:
+        engine = HeadlessEngine.new()
+        engine.state.player.conditions["poisoned"] = 2
+        engine.state.companion.conditions["poisoned"] = 1
+        restored = HeadlessEngine.restore(engine.state.to_dict())
+        self.assertEqual(restored.state.player.conditions, {"poisoned": 2})
+        self.assertEqual(restored.state.companion.conditions, {"poisoned": 1})
+
+    def test_watchtower_challenge_blocks_movement_until_resolved(self) -> None:
+        engine = HeadlessEngine.new()
+        engine.execute("move", target="collapsed_passage")
+        blocked = engine.execute("move", target="cellar")
+        self.assertFalse(blocked.accepted)
+        with patch("app.rules.dice.roll_die", return_value=1):
+            attempt = engine.execute("challenge", target="clear_debris")
+        self.assertTrue(attempt.accepted)
+        self.assertTrue(engine.state.flags["challenge_resolved:collapsed_passage"])
+        self.assertGreaterEqual(engine.state.player.hp, 1)
+        self.assertTrue(engine.execute("move", target="cellar").accepted)
+
+    def test_detect_magic_reveals_crypt_ward_solution(self) -> None:
+        engine = HeadlessEngine.new(campaign_id="lost_crypt", player_class="Wizard")
+        engine.state.player.learned_spells.append("Detect Magic")
+        engine.state.room_id = "gate"
+        hidden = {item["id"]: item for item in engine.snapshot()["challenge"]["options"]}
+        self.assertFalse(hidden["trace_ward"]["available"])
+        engine.execute("cast", spell="Detect Magic", target="me")
+        revealed = {item["id"]: item for item in engine.snapshot()["challenge"]["options"]}
+        self.assertTrue(revealed["trace_ward"]["available"])
+        self.assertTrue(engine.execute("challenge", target="trace_ward").accepted)
+
+    def test_greyfen_preparation_is_optional_and_grants_opening_bonus(self) -> None:
+        engine = HeadlessEngine.new(campaign_id="embers_of_greyfen", companion_id="eldrin")
+        engine.state.room_id = "refuge"
+        self.assertFalse(engine.snapshot()["challenge"]["required"])
+        result = engine.execute("challenge", target="eldrin_runes")
+        self.assertTrue(result.accepted)
+        self.assertEqual(engine.state.flags["prepared_strike"], 2)
+
+    def test_new_cleric_starts_with_healing_and_damage_magic(self) -> None:
+        engine = HeadlessEngine.new(player_class="Cleric")
+        self.assertEqual(engine.state.player.learned_spells, ["Cure Wounds", "Sacred Flame"])
+
+    def test_saved_cleric_receives_revised_starting_spell(self) -> None:
+        payload = HeadlessEngine.new(player_class="Cleric").state.to_dict()
+        payload["player"]["learned_spells"] = ["Cure Wounds"]
+        restored = HeadlessEngine.restore(payload)
+        self.assertEqual(restored.state.player.learned_spells, ["Cure Wounds", "Sacred Flame"])
+
+    def test_cleric_spellbook_has_contextual_targets(self) -> None:
+        engine = HeadlessEngine.new(player_class="Cleric", companion_id="torvald")
+        engine.state.in_combat = True
+        engine.state.player.hp -= 1
+        engine.state.companion.hp -= 1
+        self.assertIn("spellbook", {action["id"] for action in engine.available_actions()})
+        spells = {entry["name"]: entry for entry in engine.spellbook()}
+        self.assertEqual({target["id"] for target in spells["Cure Wounds"]["targets"]}, {"me", "Torvald"})
+        self.assertEqual(spells["Sacred Flame"]["target_type"], "enemy")
+
+    def test_guidance_applies_to_and_is_consumed_by_exploration_check(self) -> None:
+        engine = HeadlessEngine.new(player_class="Cleric")
+        engine.state.player.learned_spells.append("Guidance")
+        mana = engine.state.player.mana
+        cast = engine.execute("cast", spell="Guidance", target="me")
+        self.assertTrue(cast.accepted)
+        self.assertEqual(engine.state.player.mana, mana - 1)
+        self.assertTrue(engine.state.flags["guidance_active"])
+        with patch("app.rules.dice.roll_die", return_value=20):
+            result = engine.execute("talk")
+        self.assertTrue(result.accepted)
+        self.assertNotIn("guidance_active", engine.state.flags)
+        self.assertIn("Guidance steadies you", result.events[0].message)
+
+    def test_exploration_spell_is_rejected_in_combat_without_spending_mana(self) -> None:
+        engine = HeadlessEngine.new(player_class="Wizard")
+        engine.state.player.learned_spells.append("Detect Magic")
+        engine.state.in_combat = True
+        mana = engine.state.player.mana
+        result = engine.execute("cast", spell="Detect Magic", target="me")
+        self.assertFalse(result.accepted)
+        self.assertEqual(engine.state.player.mana, mana)
+        self.assertEqual(engine.state.turn, 0)
+
+    def test_cleric_can_heal_between_combats(self) -> None:
+        engine = HeadlessEngine.new(player_class="Cleric", companion_id="torvald")
+        engine.state.companion.hp -= 4
+        before_mana = engine.state.player.mana
+        with patch("app.rules.dice.roll_die", return_value=4):
+            result = engine.execute("cast", spell="Cure Wounds", target="Torvald")
+        self.assertTrue(result.accepted)
+        self.assertGreater(engine.state.companion.hp, engine.state.companion.max_hp - 4)
+        self.assertEqual(engine.state.player.mana, before_mana - 2)
+
+    def test_cannot_waste_cure_wounds_on_full_health_outside_combat(self) -> None:
+        engine = HeadlessEngine.new(player_class="Cleric")
+        before_mana = engine.state.player.mana
+        result = engine.execute("cast", spell="Cure Wounds", target="me")
+        self.assertFalse(result.accepted)
+        self.assertEqual(engine.state.player.mana, before_mana)
+        self.assertEqual(engine.state.turn, 0)
+
+    def test_combat_round_does_not_regenerate_mana(self) -> None:
+        engine = HeadlessEngine.new(
+            campaign_id="lost_crypt", player_class="Wizard", companion_id="eldrin"
+        )
+        engine.state.in_combat = True
+        engine.state.enemies = []
+        engine.state.player.mana = 2
+        engine.state.companion.mana = 1
+        engine._resolve_other_combatants()
+        self.assertEqual(engine.state.player.mana, 2)
+        self.assertEqual(engine.state.companion.mana, 1)
+
+    def test_level_up_increases_max_mana_without_refilling(self) -> None:
+        from app.rules.experience import grant_xp
+
+        engine = HeadlessEngine.new(player_class="Wizard")
+        engine.state.player.mana = 1
+        before_max = engine.state.player.max_mana
+        grant_xp(engine.state, 100)
+        self.assertEqual(engine.state.player.max_mana, before_max + 2)
+        self.assertEqual(engine.state.player.mana, 1)
+
     def test_character_sex_survives_save_restore(self) -> None:
         engine = HeadlessEngine.new(name="Astaria", player_class="Rogue", sex="Female")
         self.assertEqual(engine.snapshot()["player"]["sex"], "Female")
@@ -100,6 +254,9 @@ class HeadlessEngineTests(unittest.TestCase):
 
     def test_move_starts_authoritative_combat(self) -> None:
         engine = HeadlessEngine.new()
+        engine.execute("move", target="collapsed_passage")
+        with patch("app.rules.dice.roll_die", return_value=20):
+            engine.execute("challenge", target="clear_debris")
         with patch("app.rules.dice.roll_die", return_value=2):
             result = engine.execute("move", target="cellar")
         self.assertTrue(result.accepted)
@@ -110,6 +267,9 @@ class HeadlessEngineTests(unittest.TestCase):
 
     def test_combat_command_emits_structured_events(self) -> None:
         engine = HeadlessEngine.new()
+        engine.execute("move", target="collapsed_passage")
+        with patch("app.rules.dice.roll_die", return_value=20):
+            engine.execute("challenge", target="clear_debris")
         with patch("app.rules.dice.roll_die", return_value=2):
             engine.execute("move", target="cellar")
         with patch("app.rules.combat.roll_die", return_value=20), patch(
@@ -117,7 +277,7 @@ class HeadlessEngineTests(unittest.TestCase):
         ):
             result = engine.execute("attack", target="1")
         self.assertTrue(result.accepted)
-        self.assertEqual(result.state["turn"], 2)
+        self.assertEqual(result.state["turn"], 4)
         self.assertTrue(
             any(item.type in {"damage_applied", "combat_ended"} for item in result.events)
         )

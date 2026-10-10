@@ -28,8 +28,6 @@ from .rules import (
     equip_item,
     is_caster,
     move_player,
-    regen_companion_mana,
-    regen_mana,
     reset_rest_streak,
     sync_player_ac,
     start_room,
@@ -503,8 +501,6 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
             end_result = end_combat_if_needed(state)
             if end_result:
                 results.append(end_result)
-            regen_mana(state, 1)
-            regen_companion_mana(state, 1)
             state.turn += 1
             state.last_event = " ".join(results)
             reset_rest_streak(state)
@@ -529,8 +525,6 @@ def handle_combat(state: GameState, llm: LLMClient, last_input: str) -> str:
     if end_result:
         results.append(end_result)
 
-    regen_mana(state, 1)
-    regen_companion_mana(state, 1)
     state.turn += 1
     state.last_event = " ".join(results)
     reset_rest_streak(state)

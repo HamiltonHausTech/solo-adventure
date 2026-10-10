@@ -55,6 +55,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--moss); outline-
 .character-card { margin-top: 15px; padding: 15px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 4px; display: grid; grid-template-columns: 42px 1fr; gap: 11px; }
 .character-card.compact { margin-top: 8px; }
 .character-card.critical { border-color: #8e4f46; box-shadow: inset 0 0 0 1px rgba(190,100,88,.12); }
+.condition-badge { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; margin-top: 2px; padding: 6px 8px; border: 1px solid #647346; background: rgba(73,91,44,.23); color: #c6d397; font-size: 8px; text-transform: uppercase; letter-spacing: .08em; }
+.condition-badge span { color: var(--muted); font-size: 7px; }
+.condition-badge.poisoned { border-color: #778b45; box-shadow: inset 3px 0 #8fa653; }
 .critical-warning { grid-column: 1 / -1; padding: 6px 7px; background: rgba(190,100,88,.12); color: #e3a298; font-size: 7px; text-align: center; text-transform: uppercase; letter-spacing: .09em; }
 .portrait { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 2px; font: 700 24px var(--font-serif); color: #e8e0c6; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .player-portrait { background: linear-gradient(145deg, #654335, #1b2921); }
@@ -122,6 +125,7 @@ blockquote span { display: block; font: 700 8px var(--font-sans); color: var(--m
 .enemy-strip article > div:nth-child(2) { display: flex; flex-direction: column; }
 .enemy-strip strong { font: 600 14px var(--font-serif); }
 .enemy-strip span, .enemy-strip article > b { color: var(--muted); font-size: 8px; }
+.enemy-condition { width: fit-content; margin-top: 3px; padding: 2px 5px; border: 1px solid #778b45; color: #becd8e; font-size: 7px; font-style: normal; text-transform: uppercase; letter-spacing: .08em; }
 .enemy-health { grid-column: auto; }
 .action-area { padding: 24px 26px 32px; }
 .action-heading { display: flex; justify-content: space-between; margin-bottom: 12px; }
@@ -135,6 +139,10 @@ blockquote span { display: block; font: 700 8px var(--font-sans); color: var(--m
 .action-grid button small { color: var(--muted); font-size: 8px; align-self: start; }
 .action-grid .primary-action { background: #263024; border-color: #667251; }
 .action-grid .wide-action { grid-column: 1 / -1; }
+.challenge-callout { margin-bottom: 12px; padding: 15px 17px; border: 1px solid #6a704d; background: linear-gradient(135deg, rgba(120,111,61,.17), rgba(30,38,29,.55)); }
+.challenge-callout > span { color: var(--gold); font-size: 7px; text-transform: uppercase; letter-spacing: .15em; }
+.challenge-callout h2 { margin: 4px 0; font: 600 21px var(--font-serif); }
+.challenge-callout p { margin: 0; color: #c2c4b8; font: 11px/1.5 var(--font-serif); }
 
 .chronicle-header { display: flex; align-items: start; justify-content: space-between; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
 .chronicle-header h2 { margin: 5px 0 0; font: 600 22px var(--font-serif); }
@@ -337,6 +345,25 @@ blockquote span { display: block; font: 700 8px var(--font-sans); color: var(--m
 .setup-confirm > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; }
 .setup-confirm button { padding: 11px; border: 1px solid var(--line); background: transparent; cursor: pointer; }
 .setup-confirm .primary-confirm { background: #2a3527; border-color: #77855d; }
+.spellbook-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(4,6,5,.86); backdrop-filter: blur(9px); }
+.spellbook-dialog { width: min(780px, 100%); max-height: min(760px, 92vh); overflow: auto; border: 1px solid #687357; background: #121713; box-shadow: 0 28px 80px rgba(0,0,0,.55); }
+.spellbook-dialog > header { position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: 1fr auto 36px; gap: 18px; align-items: center; padding: 22px 24px; border-bottom: 1px solid var(--line); background: rgba(18,23,19,.96); }
+.spellbook-dialog h2 { margin: 3px 0 0; font: 600 28px var(--font-serif); }
+.spellbook-mana { display: flex; flex-direction: column; text-align: right; color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .12em; }
+.spellbook-mana b { margin-top: 3px; color: #8aa9ca; font: 600 14px var(--font-mono); }
+.spellbook-close { width: 34px; height: 34px; border: 1px solid var(--line); background: transparent; font-size: 20px; cursor: pointer; }
+.spell-list { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; padding: 18px; }
+.spell-list article { padding: 16px; border: 1px solid #3f493b; background: linear-gradient(145deg, rgba(42,53,39,.45), rgba(15,19,16,.85)); }
+.spell-list article.unavailable { opacity: .58; }
+.spell-heading { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; }
+.spell-heading h3 { margin: 2px 0 0; font: 600 19px var(--font-serif); }
+.spell-heading small { color: var(--moss); font-size: 7px; text-transform: uppercase; letter-spacing: .12em; }
+.spell-heading > b { color: #8aa9ca; font: 600 9px var(--font-mono); }
+.spell-rune { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #667251; color: var(--gold); background: #20281e; }
+.spell-list article > p { min-height: 34px; margin: 12px 0; color: #bdc1b5; font: 12px/1.45 var(--font-serif); }
+.spell-targets { display: flex; flex-wrap: wrap; gap: 7px; }
+.spell-targets button { flex: 1; min-width: 120px; padding: 9px; border: 1px solid #77855d; background: #293427; cursor: pointer; font-size: 9px; }
+.spell-reason { padding: 9px; border: 1px solid var(--line); color: var(--muted); font-size: 8px; text-align: center; text-transform: uppercase; letter-spacing: .08em; }
 
 @media (max-width: 1050px) {
   .play-grid { grid-template-columns: 220px minmax(420px, 1fr); }
@@ -381,5 +408,8 @@ blockquote span { display: block; font: 700 8px var(--font-sans); color: var(--m
   .hub-stats { grid-template-columns: repeat(3, 1fr); }
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .roster-list > button { grid-template-columns: 38px 1fr 20px; }
+  .spellbook-backdrop { padding: 0; place-items: stretch; }
+  .spellbook-dialog { width: 100%; max-height: 100vh; }
+  .spell-list { grid-template-columns: 1fr; }
   .session-status { display: none; }
 }

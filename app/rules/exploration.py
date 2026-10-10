@@ -13,6 +13,12 @@ from .inventory import add_item_to_inventory, can_add_item, roll_loot
 from .dice import check, roll_dice
 
 
+def _guidance_bonus(state: GameState) -> int:
+    if not state.flags.pop("guidance_active", False):
+        return 0
+    return 2
+
+
 def start_room(state: GameState, room: Room) -> str:
     if room.room_id not in state.visited:
         state.visited.append(room.room_id)
@@ -39,17 +45,18 @@ def _handle_social_room(state: GameState, room: Room, action: str) -> Optional[s
     done_flag = cfg.get("done_flag", "social_done")
 
     if action in {"talk", "speak", "parley", "approach"}:
-        stat_bonus = state.player.stats.get(stat_key, 0)
+        guidance = _guidance_bonus(state)
+        stat_bonus = state.player.stats.get(stat_key, 0) + guidance
         success, roll, total = check(stat_bonus, dc)
         state.flags[str(done_flag)] = True
         if success and success_flag:
             state.flags[str(success_flag)] = True
         if success and success_msg:
-            return str(success_msg).format(
+            return ("Guidance steadies you. " if guidance else "") + str(success_msg).format(
                 roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
             )
         if not success and fail_msg:
-            return str(fail_msg).format(
+            return ("Guidance steadies you. " if guidance else "") + str(fail_msg).format(
                 roll=roll, total=total, stat=stat_key, bonus=stat_bonus, dc=dc
             )
         # Fallback if no config messages
@@ -76,7 +83,8 @@ def _handle_loot_room(state: GameState, room: Room, action: str) -> Optional[str
     if action in {"search", "open", "loot", "inspect"}:
         if state.flags.get(taken_flag):
             return "The chest is already open and empty."
-        stat_bonus = state.player.stats.get(stat_key, 0)
+        guidance = _guidance_bonus(state)
+        stat_bonus = state.player.stats.get(stat_key, 0) + guidance
         success, roll, total = check(stat_bonus, dc)
         if success:
             if win_item_id:
@@ -91,11 +99,11 @@ def _handle_loot_room(state: GameState, room: Room, action: str) -> Optional[str
             if game_over:
                 state.game_over = True
             if success_msg:
-                return str(success_msg).format(roll=roll, total=total)
+                return ("Guidance steadies you. " if guidance else "") + str(success_msg).format(roll=roll, total=total)
             return f"You work the lock free (roll {roll} -> {total})."
         state.flags[failed_flag] = True
         if fail_msg:
-            return str(fail_msg).format(roll=roll, total=total)
+            return ("Guidance steadies you. " if guidance else "") + str(fail_msg).format(roll=roll, total=total)
         return f"Your tools slip (roll {roll} -> {total}). The lock resists for now."
     if action in {"leave", "move", "continue", "go"}:
         return "There's nowhere left to go but the chest."

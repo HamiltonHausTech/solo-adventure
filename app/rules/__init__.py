@@ -9,6 +9,7 @@ from .combat import (
     clear_round_buffs,
     end_combat_if_needed,
 )
+from .challenges import active_challenge, challenge_blocks_movement, resolve_challenge
 from .companions import create_companion, create_campaign_companions, create_companion_from_profile, scale_companion_for_level
 from .dice import check, roll_die, roll_dice
 from .enemies import create_enemy, create_enemies
@@ -57,8 +58,10 @@ __all__ = [
     "apply_exploration_action",
     "apply_player_action",
     "apply_rest",
+    "active_challenge",
     "award_campaign_completion",
     "can_add_item",
+    "challenge_blocks_movement",
     "check",
     "create_campaign_companions",
     "create_companion",
@@ -91,6 +94,7 @@ __all__ = [
     "regen_companion_mana",
     "regen_mana",
     "reset_rest_streak",
+    "resolve_challenge",
     "roll_die",
     "roll_dice",
     "roll_loot",
