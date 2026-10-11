@@ -173,8 +173,10 @@ for (const failure of ['network', 'http', 'invalid-json']) {
 }
 
 test('selection ignores late success, late errors and cleared selection; old controls disappear', async ({ page, request }) => {
-  const a = await saved(request, await create(request, 'Race Alpha'));
-  await create(request, 'Race Beta');
+  const alphaName = `Race Alpha ${randomUUID()}`;
+  const betaName = `Race Beta ${randomUUID()}`;
+  const a = await saved(request, await create(request, alphaName));
+  await create(request, betaName);
   let release;
   let status = 200;
   const data = await (await request.get(`${api}/api/adventurers/${a.adventurer_id}`)).json();
@@ -183,10 +185,10 @@ test('selection ignores late success, late errors and cleared selection; old con
     await route.fulfill({ status, json: status === 200 ? data : { error: 'Obsolete Alpha error' } });
   });
   await page.goto('/');
-  const alpha = page.getByRole('button', { name: /Race Alpha.*Use character/ });
-  const beta = page.getByRole('button', { name: /Race Beta.*Use character/ });
+  const alpha = page.getByRole('button', { name: new RegExp(`${alphaName}.*Use character`) });
+  const beta = page.getByRole('button', { name: new RegExp(`${betaName}.*Use character`) });
   await beta.click();
-  await expect(page.getByRole('region', { name: 'Race Beta character management' })).toBeVisible();
+  await expect(page.getByRole('region', { name: `${betaName} character management` })).toBeVisible();
   for (const fail of [false, true]) {
     status = fail ? 500 : 200;
     await alpha.click();
@@ -194,12 +196,12 @@ test('selection ignores late success, late errors and cleared selection; old con
     await expect(page.locator('.adventurer-hub')).toHaveCount(0);
     await expect(page.locator('.begin-button')).toBeDisabled();
     await beta.click();
-    await expect(page.getByRole('region', { name: 'Race Beta character management' })).toBeVisible();
+    await expect(page.getByRole('region', { name: `${betaName} character management` })).toBeVisible();
     const response = page.waitForResponse(`${api}/api/adventurers/${a.adventurer_id}`);
     release();
     await (await response).finished();
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await expect(page.getByRole('region', { name: 'Race Beta character management' })).toBeVisible();
+    await expect(page.getByRole('region', { name: `${betaName} character management` })).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
   }
   await alpha.click();

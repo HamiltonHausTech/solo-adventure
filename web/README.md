@@ -51,6 +51,17 @@ errors preserve the server's explanation and offer **Return to adventurer
 roster**. Select the current adventurer there and begin a new campaign; do not
 retry writes to the old session expecting newer character changes to disappear.
 
+## Combat awareness
+
+**Party readiness**, beside the actions on desktop and mobile, shows exact HP
+at or below 25%, fallen companions, and low/depleted caster mana. Potion guidance
+requires a usable healing potion; spellbook costs still govern individual spells.
+Net HP losses come only from structured `health_changed` command events, never
+narrative matching, and disappear on the next command or resume. A cleared-room
+recovery summary uses current named party HP/mana and opens the existing Camp
+preview; it disappears after living-party recovery, movement to an uncleared
+room, a new fight, or death. Camp does not revive fallen companions.
+
 ## Verification
 
 The active adventure keeps the server's current objective visible above the
@@ -93,6 +104,10 @@ npm run test:e2e
   discovery checks mobile layout and server-known locations; finale cases check
   prepared versus fallback options and saved completion. Requires the matching
   Python journey/camp/finale implementation.
+- `PYTHON=/path/to/python3.14 npm run test:browser -- tests/browser/combat-awareness.spec.mjs --repeat-each=2`:
+  real disposable Python fixtures cover thresholds, healing, empty supplies,
+  caster/noncaster mana, net round feedback, death, and victory/Camp/movement
+  lifecycle with reloads. No live AI or user database is used.
 - `PYTHON=/path/to/python3.14 npm test` selects an interpreter explicitly. This
   is useful on macOS where `python3` can still mean Apple's older interpreter.
 - Linux CI may need `npx playwright install --with-deps chromium`.

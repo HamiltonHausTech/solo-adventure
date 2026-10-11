@@ -56,6 +56,59 @@ GameStore(sys.argv[1]).save(sys.argv[2], engine)
   return { id, name };
 }
 
+export function seedCombatAwareness(scenario = 'threshold') {
+  if (!['threshold', 'above', 'empty', 'noncaster', 'mana-low', 'damage', 'healing-damage', 'victory', 'death', 'fallen', 'spells-all', 'spells-some', 'spells-affordable', 'spells-none', 'spells-above'].includes(scenario)) throw new Error('Unknown awareness fixture');
+  const scratch = fixtureDirectory();
+  const id = randomUUID();
+  const name = `Naria ${id.slice(0, 8)}`;
+  execFileSync(process.env.PYTHON || 'python3', ['-c', `
+import sys
+from app.engine import HeadlessEngine
+from app.storage import GameStore
+from app.rules.exploration import start_room
+from app.content import get_room
+engine = HeadlessEngine.new(name=sys.argv[3], player_class="Fighter" if sys.argv[4] == "noncaster" else "Cleric" if sys.argv[4] == "mana-low" else "Wizard", campaign_id="embers_of_greyfen", companion_id="eldrin")
+s = engine.state
+scenario = sys.argv[4]
+s.player.max_hp = 20
+s.player.hp = 6 if scenario == "above" else 5
+s.player.mana = 1 if scenario == "mana-low" else 0
+s.companion.hp = 0 if scenario == "fallen" else 2
+s.companion.mana = 0
+if scenario == "mana-low":
+    s.player.learned_spells.append("Guidance")
+if scenario == "empty":
+    s.inventory = []
+if scenario.startswith("spells-"):
+    s.player.learned_spells = ["Spark", "Sleep", "Shield"]
+    s.player.mana = 1 if scenario == "spells-all" else 3 if scenario == "spells-affordable" else 2
+    if scenario == "spells-none":
+        s.player.learned_spells = ["Shield"]
+    if scenario == "spells-above":
+        s.player.learned_spells = ["Sleep"]
+if scenario.startswith("spells-") or scenario in {"damage", "healing-damage", "victory", "death"}:
+    s.room_id = "high_road"
+    start_room(s, get_room(s.campaign_id, s.room_id))
+    s.companion.hp = 0
+    # Deterministic real rules: party poison supplies the HP change; living
+    # enemies cannot hit. Victory has one remaining, reliably hittable foe.
+    s.player.ac = 1000
+    for enemy in s.enemies:
+        enemy.ac = 1000
+        enemy.hp = enemy.max_hp = 100
+    if scenario == "victory":
+        for enemy in s.enemies:
+            enemy.hp = 0
+        s.enemies[0].hp = 1
+        s.enemies[0].ac = -100
+    else:
+        s.player.hp = 1 if scenario == "death" else 10
+        s.player.conditions["poisoned"] = 2
+GameStore(sys.argv[1]).save(sys.argv[2], engine)
+`, join(scratch, 'games.sqlite'), id, name, scenario], { cwd: '..', stdio: 'inherit', timeout: 10000 });
+  return { id, name };
+}
+
 export function seedProgression() {
   const scratch = fixtureDirectory();
   const id = randomUUID();

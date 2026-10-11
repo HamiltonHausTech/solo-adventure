@@ -75,6 +75,15 @@ The terminal UI and web clients can share the same authoritative Python rules
 through `HeadlessEngine`. Commands return a client-safe state snapshot plus
 structured events suitable for animation, narration, sound, and replay.
 
+The browser keeps low-health (living party members at or below 25%) and caster
+mana warnings beside the actions. Additive `health_changed` events identify the
+player or `companion:<index>` and include `hp_before`, `hp_after`, `max_hp`, and
+`hp_delta`: these are **net changes over the resolved command/round**, not hit
+amounts. Recovery-only exploration commands retain their existing summary event.
+The action-area feedback is transient and does not replay when loading a save.
+Cleared rooms with living party members needing recovery show current party
+HP/mana and a shortcut to the existing Camp preview; no extra healing is applied.
+
 Run the development API:
 
 ```bash

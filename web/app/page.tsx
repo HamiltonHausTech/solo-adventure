@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE as apiBase, apiFetch } from "./api";
 import { useDialogFocus } from "./use-dialog-focus";
 import { ConnectionScreen } from "./connection-screen";
+import { CombatAwareness } from "./combat-awareness";
 
 type EngineEvent = {
   event_id: string;
@@ -310,6 +311,7 @@ export default function Home() {
   const [gameId, setGameId] = useState<string | null>(null);
   const [game, setGame] = useState<EngineState | null>(null);
   const [events, setEvents] = useState<EngineEvent[]>([]);
+  const [recentEvents, setRecentEvents] = useState<EngineEvent[]>([]);
   const [sound, setSound] = useState(false);
   const [voice, setVoice] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -408,6 +410,7 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.error || "Could not create the game.");
       setGameId(payload.game_id);
       setGame(payload.state);
+      setRecentEvents([]);
       setEvents([{
         event_id: "opening",
         turn: 0,
@@ -484,6 +487,7 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.error || "That adventure could not be restored.");
       setGameId(saved.game_id);
       setGame(payload.state);
+      setRecentEvents([]);
       setEvents([{
         event_id: `resume-${saved.game_id}`,
         turn: payload.state.turn,
@@ -607,6 +611,7 @@ export default function Home() {
     options: { target?: string; spell?: string; item?: string } = {},
   ) {
     if (!gameId || busy || mutationPending.current) return;
+    setRecentEvents([]);
     mutationPending.current = true;
     setBusy(true);
     setError(null);
@@ -619,6 +624,7 @@ export default function Home() {
       const payload = await response.json() as ApiResponse;
       if (!response.ok) throw new Error(payload.error || "The action could not be resolved.");
       const newEvents = payload.events || [];
+      setRecentEvents(newEvents);
       setGame(payload.state);
       setEvents((current) => [...current, ...newEvents].slice(-60));
       playFeedback(newEvents);
@@ -760,7 +766,7 @@ export default function Home() {
     .find((item) => item.id === game.campaign.id)?.companions
     .find((item) => item.name === companion.name);
   const potions = game.inventory
-    .filter((item) => item.id === "healing_potion")
+    .filter((item) => item.id === "healing_potion" && item.kind === "potion" && item.effect?.type === "heal")
     .reduce((sum, item) => sum + (item.quantity || 1), 0);
   const playerWounded = game.player.hp < game.player.max_hp;
   const companionWounded = companion.hp < companion.max_hp;
@@ -904,6 +910,11 @@ export default function Home() {
           )}
 
           <div className="action-area">
+            <CombatAwareness player={game.player} companions={game.companions} spellbook={game.spellbook} phase={game.phase} gameOver={game.game_over}
+              cleared={Array.isArray(game.flags.defeated_rooms) && game.flags.defeated_rooms.includes(game.room.id)}
+              canUsePotion={potions > 0 && game.available_actions.some(action => action.id === "use" && !action.disabled)}
+              canCamp={Boolean(game.camp?.available)} busy={busy} events={recentEvents}
+              onPotion={() => command("use", { item: "healing potion", target: "me" })} onCamp={() => setCampOpen(true)} />
             {game.challenge && <div className="challenge-callout"><span>{game.challenge.required ? "Path challenge" : "Optional opportunity"}</span><h2>{game.challenge.title}</h2><p>{game.challenge.prompt}</p></div>}
             <div className="action-heading"><span className="section-label">{game.phase === "combat" ? "Choose your move" : game.game_over ? "Campaign resolved" : "What do you do?"}</span><small>{busy ? "Resolving…" : "Resolved by Python rules"}</small></div>
             <div className="action-grid">

@@ -171,7 +171,7 @@ def _apply_player_action(
         if mana_cost <= 0:
             raise _ActionRejected(f"You don't know how to cast {spell_name}.")
         if state.player.mana < mana_cost:
-            raise _ActionRejected("You are out of mana.")
+            raise _ActionRejected(f"Requires {mana_cost} mana; {state.player.mana} available.")
 
         # Cure Wounds: healing spell, target player or companion
         if spell_name == "Cure Wounds":
@@ -454,6 +454,9 @@ def apply_enemy_action(state: GameState) -> List[str]:
 def end_combat_if_needed(state: GameState) -> Optional[str]:
     from .experience import grant_xp
 
+    if state.player.hp <= 0:
+        state.game_over = True
+        return "You collapse from your wounds. Your adventure ends here."
     if not state.enemies:
         return None
     if all(enemy.hp <= 0 for enemy in state.enemies):
@@ -488,7 +491,4 @@ def end_combat_if_needed(state: GameState) -> Optional[str]:
             parts.append(f"XP +{total_xp}.")
         parts.extend(level_messages)
         return " ".join(parts)
-    if state.player.hp <= 0:
-        state.game_over = True
-        return "You collapse from your wounds. The watchtower claims another victim."
     return None

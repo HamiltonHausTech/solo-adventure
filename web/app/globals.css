@@ -31,6 +31,17 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .journey-details li { margin-bottom: 7px; overflow-wrap: anywhere; }
 .journey-details small { display: block; color: var(--muted); }
 .journey-details [aria-current="location"] b { color: var(--moss); }
+.combat-awareness { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.combat-awareness p { margin: 0 0 10px; padding: 10px 12px; border-left: 3px solid var(--gold); background: #24251c; }
+.combat-awareness .readiness-danger, .combat-awareness .readiness-damage { border-color: #e88d80; background: #34201e; color: #ffddd6; }
+.combat-awareness .readiness-mana { border-color: #9baef0; background: #202637; color: #dde5ff; }
+.combat-awareness span { display: block; font-size: 12px; }
+.combat-awareness button { cursor: pointer; border: 1px solid var(--moss); border-radius: 5px; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-soft); }
+.combat-awareness button:disabled { opacity: .5; cursor: wait; }
+.post-battle { border: 1px solid var(--line); padding: 12px; margin-bottom: 14px; background: var(--panel); }
+.post-battle h3 { margin: 0 0 8px; font-size: 14px; color: var(--moss); }
+.post-battle ul { margin: 0 0 12px; padding-left: 18px; }
+.post-battle button { margin-bottom: 0; }
 .action-grid .location-status { color: var(--gold); }
 .camp-dialog { max-height: 90dvh; overflow-y: auto; }
 .camp-dialog ul { padding: 0; list-style: none; margin: 18px 0; }
