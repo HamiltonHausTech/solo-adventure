@@ -578,6 +578,7 @@ class HeadlessEngine:
             "player_hp": state.player.hp,
             "player_mana": state.player.mana,
             "companion_hp": state.companion.hp,
+            "party_hp": [actor.hp for actor in [state.player, *state.companions]],
             "xp": state.player.xp,
             "gold": state.player.gold,
             "enemy_hp": [enemy.hp for enemy in state.enemies],
@@ -633,6 +634,21 @@ class HeadlessEngine:
                     data=data,
                 )
             )
+        # Net command/round changes, never individual hits. Legacy narrative
+        # event types and flat deltas remain backward compatible.
+        for index, member in enumerate([self.state.player, *self.state.companions]):
+            hp_before = before["party_hp"][index]
+            delta = member.hp - hp_before
+            if delta and (before["in_combat"] or delta < 0):
+                direction = "fell" if delta < 0 else "rose"
+                events.append(EngineEvent(
+                    event_id=str(uuid4()), turn=self.state.turn,
+                    type="health_changed", phase=phase,
+                    actor="player" if index == 0 else f"companion:{index - 1}",
+                    message=f"{member.name}: health {direction} {abs(delta)} this turn · {member.hp}/{member.max_hp} HP (net change).",
+                    data={"hp_before": hp_before, "hp_after": member.hp,
+                          "max_hp": member.max_hp, "hp_delta": delta},
+                ))
         if before["in_combat"] != after["in_combat"]:
             events.append(
                 EngineEvent(
